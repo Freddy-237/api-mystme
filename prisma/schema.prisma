@@ -1,0 +1,133 @@
+// ============================================================================
+// MystMe — Prisma schema (documentation only — backend uses raw pg queries)
+// Reflects migrations: 001_init.sql + 002_realtime.sql + 003_bio_deleted.sql
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── 1. Users ───
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  anonymousUid String    @unique @map("anonymous_uid") @db.Uuid
+  pseudo       String    @db.VarChar(100)
+  avatarUrl    String?   @map("avatar_url")
+  bio          String    @default("")
+  lastSeenAt   DateTime? @default(now()) @map("last_seen_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  // Moderation (migration 002)
+  isBanned  Boolean   @default(false) @map("is_banned")
+  banReason String?   @map("ban_reason")
+  bannedAt  DateTime? @map("banned_at")
+
+  ownedLinks         Link[]
+  ownedConversations Conversation[] @relation("owner")
+  anonConversations  Conversation[] @relation("anonymous")
+  sentMessages       Message[]
+  reports            Report[]
+
+  @@map("users")
+}
+
+// ─── 2. Links ───
+model Link {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(20)
+  ownerId   String   @map("owner_id") @db.Uuid
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  owner         User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@index([code], map: "idx_links_code")
+  @@index([ownerId], map: "idx_links_owner")
+  @@map("links")
+}
+
+// ─── 3. Conversations ───
+model Conversation {
+  id          String    @id @default(uuid()) @db.Uuid
+  linkId      String    @map("link_id") @db.Uuid
+  ownerId     String    @map("owner_id") @db.Uuid
+  anonymousId String?   @map("anonymous_id") @db.Uuid
+  status      String    @default("active") @db.VarChar(20) // active | blocked | archived | expired | deleted
+  startedAt   DateTime? @default(now()) @map("started_at")
+  blockedAt   DateTime? @map("blocked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  link      Link          @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  owner     User          @relation("owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  anonymous User?         @relation("anonymous", fields: [anonymousId], references: [id], onDelete: SetNull)
+  messages  Message[]
+  trust     TrustStatus[]
+  reports   Report[]
+
+  @@index([linkId], map: "idx_conversations_link")
+  @@index([ownerId], map: "idx_conversations_owner")
+  @@index([anonymousId], map: "idx_conversations_anonymous")
+  @@map("conversations")
+}
+
+// ─── 4. Messages ───
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderId       String   @map("sender_id") @db.Uuid
+  content        String
+  isDeleted      Boolean  @default(false) @map("is_deleted")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Read receipts (migration 002)
+  isRead Boolean   @default(false) @map("is_read")
+  readAt DateTime? @map("read_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  reports      Report[]
+
+  @@index([conversationId], map: "idx_messages_conversation")
+  @@index([senderId], map: "idx_messages_sender")
+  @@index([conversationId, isRead], map: "idx_messages_is_read")
+  @@index([conversationId, createdAt(sort: Desc)], map: "idx_messages_created_desc")
+  @@map("messages")
+}
+
+// ─── 5. Trust Status ───
+model TrustStatus {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  status         String   @default("new") @db.VarChar(20) // new | known | trusted | revealed
+  updatedAt      DateTime @default(now()) @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId], map: "idx_trust_conversation")
+  @@map("trust_status")
+}
+
+// ─── 6. Reports ───
+model Report {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  messageId      String?  @map("message_id") @db.Uuid
+  reportedBy     String   @map("reported_by") @db.Uuid
+  reason         String   @default("Contenu inapproprié")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Review status (migration 002)
+  status String @default("pending") @db.VarChar(20) // pending | reviewed | dismissed
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message      Message?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  reporter     User         @relation(fields: [reportedBy], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
