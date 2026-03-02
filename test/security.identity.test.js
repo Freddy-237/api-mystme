@@ -82,3 +82,22 @@ test('bearer token auth still works on protected endpoint', async () => {
 
   assert.equal(typeof meRes.body?.id, 'string');
 });
+
+test('session-token returns a bearer token for authenticated cookie session', async () => {
+  const initRes = await request(app)
+    .post('/identity/init')
+    .expect(201);
+
+  const setCookie = initRes.headers['set-cookie'] || [];
+  const authCookie = extractCookie(setCookie, env.authCookieName);
+
+  assert.ok(authCookie, 'auth cookie should be set');
+
+  const tokenRes = await request(app)
+    .get('/identity/session-token')
+    .set('Cookie', authCookie)
+    .expect(200);
+
+  assert.equal(typeof tokenRes.body?.token, 'string');
+  assert.ok(tokenRes.body.token.length > 20, 'session token should look like a JWT');
+});

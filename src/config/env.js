@@ -8,6 +8,18 @@ const parseOrigins = () => {
     .filter(Boolean);
 };
 
+const parseBool = (value, fallback = false) => {
+  if (value == null) return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
+};
+
+const requireInProduction = (name, value) => {
+  if (process.env.NODE_ENV === 'production' && !value) {
+    throw new Error(`${name} is required in production`);
+  }
+  return value;
+};
+
 module.exports = {
   port: process.env.PORT || 5000,
   isProduction: process.env.NODE_ENV === 'production',
@@ -27,11 +39,13 @@ module.exports = {
   authCookieDomain: process.env.AUTH_COOKIE_DOMAIN || undefined,
   csrfCookieName: process.env.CSRF_COOKIE_NAME || 'mystme_csrf',
   csrfHeaderName: process.env.CSRF_HEADER_NAME || 'x-csrf-token',
+  dbSsl: parseBool(process.env.DB_SSL, process.env.NODE_ENV === 'production'),
+  databaseUrl: process.env.DATABASE_URL || undefined,
   db: {
-    host: process.env.DB_HOST || 'localhost',
+    host: requireInProduction('DB_HOST', process.env.DB_HOST) || 'localhost',
     port: parseInt(process.env.DB_PORT) || 5432,
-    user: process.env.DB_USER || 'postgres',
+    user: requireInProduction('DB_USER', process.env.DB_USER) || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    name: process.env.DB_NAME || 'mystme',
+    name: requireInProduction('DB_NAME', process.env.DB_NAME) || 'mystme',
   },
 };

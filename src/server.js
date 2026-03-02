@@ -23,3 +23,20 @@ pool.query('SELECT NOW()')
     logger.error('❌ Failed to connect to PostgreSQL', err.message);
     process.exit(1);
   });
+
+const shutdown = async (signal) => {
+  logger.info({ signal }, 'Received shutdown signal');
+  server.close(async () => {
+    try {
+      await pool.end();
+      logger.info('PostgreSQL pool closed');
+      process.exit(0);
+    } catch (error) {
+      logger.error({ err: error }, 'Error during shutdown');
+      process.exit(1);
+    }
+  });
+};
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

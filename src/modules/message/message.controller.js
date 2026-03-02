@@ -37,6 +37,44 @@ const uploadToCloudinaryImage = (buffer, conversationId) =>
     stream.end(buffer);
   });
 
+const uploadToCloudinaryFile = (buffer, conversationId) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'mystme/messages/files',
+        resource_type: 'raw',
+        public_id: `${conversationId}_${Date.now()}`,
+      },
+      (error, result) => {
+        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+
+const uploadToCloudinaryAudio = (buffer, conversationId) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'mystme/messages/audio',
+        resource_type: 'video',
+        public_id: `${conversationId}_${Date.now()}`,
+      },
+      (error, result) => {
+        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
+        resolve(result.secure_url);
+      }
+    );
+    stream.end(buffer);
+  });
+
+const resolveRecipientId = async (conversationId, senderId) => {
+  const conv = await conversationRepository.findById(conversationId);
+  if (!conv) return null;
+  return conv.owner_id === senderId ? conv.anonymous_id : conv.owner_id;
+};
+
 const notifyRecipient = async ({ conversationId, senderId, preview }) => {
   try {
     const conv = await conversationRepository.findById(conversationId);
@@ -62,17 +100,26 @@ const notifyRecipient = async ({ conversationId, senderId, preview }) => {
 
 const sendMessage = async (req, res, next) => {
   try {
-    const { conversationId, content } = req.body;
+    const { conversationId, content, replyToMessageId } = req.body;
     if (!conversationId || !content) {
       return res.status(400).json({ message: 'conversationId et content requis' });
     }
 
-    const message = await messageService.sendMessage(conversationId, req.user.id, content);
+    const message = await messageService.sendMessage(
+      conversationId,
+      req.user.id,
+      content,
+      replyToMessageId
+    );
 
     // Emit to the conversation room via Socket.io
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
+      const recipientId = await resolveRecipientId(conversationId, req.user.id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('new_message', message);
+      }
     } catch (_) {
       // Socket not initialized — skip
     }
@@ -112,9 +159,34 @@ const deleteMessage = async (req, res, next) => {
     try {
       const io = getIO();
       io.to(msg.conversation_id).emit('message_deleted', { id: msg.id, conversationId: msg.conversation_id });
+      const recipientId = await resolveRecipientId(msg.conversation_id, msg.sender_id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('message_deleted', {
+          id: msg.id,
+          conversationId: msg.conversation_id,
+        });
+      }
     } catch (_) {}
 
     res.json(msg);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const hideMessageForMe = async (req, res, next) => {
+  try {
+    await messageService.hideMessageForMe(req.params.id, req.user.id);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+};
+
+const unhideMessageForMe = async (req, res, next) => {
+  try {
+    await messageService.unhideMessageForMe(req.params.id, req.user.id);
+    res.status(204).send();
   } catch (error) {
     next(error);
   }
@@ -139,6 +211,10 @@ const sendVideo = async (req, res, next) => {
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
+      const recipientId = await resolveRecipientId(conversationId, req.user.id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('new_message', message);
+      }
     } catch (_) {}
 
     await notifyRecipient({
@@ -172,6 +248,10 @@ const sendImage = async (req, res, next) => {
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
+      const recipientId = await resolveRecipientId(conversationId, req.user.id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('new_message', message);
+      }
     } catch (_) {}
 
     await notifyRecipient({
@@ -186,10 +266,88 @@ const sendImage = async (req, res, next) => {
   }
 };
 
+const sendFile = async (req, res, next) => {
+  try {
+    const { conversationId } = req.body;
+    const file = req.file;
+
+    if (!conversationId || !file) {
+      return res.status(400).json({ message: 'conversationId et fichier requis' });
+    }
+
+    const mediaUrl = await uploadToCloudinaryFile(file.buffer, conversationId);
+    const message = await messageService.sendFileMessage(
+      conversationId,
+      req.user.id,
+      mediaUrl
+    );
+
+    try {
+      const io = getIO();
+      io.to(conversationId).emit('new_message', message);
+      const recipientId = await resolveRecipientId(conversationId, req.user.id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('new_message', message);
+      }
+    } catch (_) {}
+
+    await notifyRecipient({
+      conversationId,
+      senderId: req.user.id,
+      preview: '📎 Fichier reçu',
+    });
+
+    res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const sendAudio = async (req, res, next) => {
+  try {
+    const { conversationId } = req.body;
+    const file = req.file;
+
+    if (!conversationId || !file) {
+      return res.status(400).json({ message: 'conversationId et audio requis' });
+    }
+
+    const mediaUrl = await uploadToCloudinaryAudio(file.buffer, conversationId);
+    const message = await messageService.sendAudioMessage(
+      conversationId,
+      req.user.id,
+      mediaUrl
+    );
+
+    try {
+      const io = getIO();
+      io.to(conversationId).emit('new_message', message);
+      const recipientId = await resolveRecipientId(conversationId, req.user.id);
+      if (recipientId) {
+        io.to(`user:${recipientId}`).emit('new_message', message);
+      }
+    } catch (_) {}
+
+    await notifyRecipient({
+      conversationId,
+      senderId: req.user.id,
+      preview: '🎤 Audio reçu',
+    });
+
+    res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   sendMessage,
   getMessages,
   deleteMessage,
+  hideMessageForMe,
+  unhideMessageForMe,
   sendVideo,
   sendImage,
+  sendFile,
+  sendAudio,
 };

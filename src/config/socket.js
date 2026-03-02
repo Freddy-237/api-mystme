@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const env = require('./env');
 const logger = require('../utils/logger');
 const parseCookies = require('../utils/parseCookies');
+const { extractBearerToken } = require('../utils/authToken');
 
 let io;
 
@@ -19,9 +20,11 @@ const initSocket = (httpServer) => {
 
   // JWT auth middleware — reject connections without a valid token
   io.use((socket, next) => {
-    const authToken = socket.handshake.auth?.token;
+    const authTokenRaw = socket.handshake.auth?.token;
+    const authToken = typeof authTokenRaw === 'string' ? authTokenRaw.trim() : null;
+    const authHeaderToken = extractBearerToken(socket.handshake.headers?.authorization);
     const cookieToken = parseCookies(socket.handshake.headers?.cookie || '')[env.authCookieName];
-    const token = authToken || cookieToken;
+    const token = authToken || authHeaderToken || cookieToken;
     if (!token) {
       return next(new Error('Authentication required'));
     }
@@ -36,6 +39,8 @@ const initSocket = (httpServer) => {
   io.on('connection', (socket) => {
     const uid = socket.user?.userId ?? socket.id;
     logger.info({ socketId: socket.id, userId: uid }, 'socket connected');
+
+    socket.join(`user:${uid}`);
 
     // Join a conversation room — verify user is a participant
     socket.on('join_conversation', async (conversationId) => {

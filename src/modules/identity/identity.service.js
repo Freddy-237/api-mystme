@@ -69,10 +69,19 @@ const updatePushToken = async (userId, token) => {
   return updated;
 };
 
+const issueSessionToken = async (userId) => {
+  const user = await identityRepository.findById(userId);
+  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+
+  const token = generateToken(user.id);
+  return { token };
+};
+
 module.exports = {
   initIdentity,
   getMe,
   updatePseudo,
   updateBio,
   updatePushToken,
+  issueSessionToken,
 };

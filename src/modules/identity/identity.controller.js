@@ -89,6 +89,16 @@ const refreshCsrf = async (_req, res, next) => {
   }
 };
 
+const issueSessionToken = async (req, res, next) => {
+  try {
+    const data = await identityService.issueSessionToken(req.user.id);
+    res.cookie(env.authCookieName, data.token, buildCookieOptions(true));
+    res.status(200).json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   initIdentity,
   getMe,
@@ -97,4 +107,5 @@ module.exports = {
   updatePushToken,
   logout,
   refreshCsrf,
+  issueSessionToken,
 };

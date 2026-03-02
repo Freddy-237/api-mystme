@@ -1,14 +1,10 @@
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const parseCookies = require('../utils/parseCookies');
+const { extractBearerToken } = require('../utils/authToken');
 
 const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
-  let token;
-  if (authHeader) {
-    token = authHeader.split(' ')[1];
-  }
+  let token = extractBearerToken(req.headers.authorization);
 
   if (!token) {
     const cookies = parseCookies(req.headers.cookie);

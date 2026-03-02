@@ -6,10 +6,22 @@ const messageController = require('./message.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
 const validate = require('../../middlewares/validate.middleware');
 
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES },
 });
+
+const withFile = (fieldName, isValidType, invalidMessage) => [
+  upload.single(fieldName),
+  (req, res, next) => {
+    if (!req.file || !isValidType(req.file.mimetype)) {
+      return res.status(400).json({ message: invalidMessage });
+    }
+    return next();
+  },
+];
 
 // POST /message — send a message
 router.post(
@@ -17,6 +29,7 @@ router.post(
   authMiddleware,
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   body('content').isString().trim().isLength({ min: 1, max: 5000 }).withMessage('Contenu requis (max 5000 car.'),
+  body('replyToMessageId').optional().isUUID().withMessage('replyToMessageId invalide'),
   validate,
   messageController.sendMessage,
 );
@@ -25,13 +38,7 @@ router.post(
 router.post(
   '/video',
   authMiddleware,
-  upload.single('video'),
-  (req, res, next) => {
-    if (!req.file || !req.file.mimetype.startsWith('video/')) {
-      return res.status(400).json({ message: 'Fichier vidéo invalide' });
-    }
-    next();
-  },
+  ...withFile('video', (mimetype) => mimetype.startsWith('video/'), 'Fichier vidéo invalide'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendVideo,
@@ -41,16 +48,30 @@ router.post(
 router.post(
   '/image',
   authMiddleware,
-  upload.single('image'),
-  (req, res, next) => {
-    if (!req.file || !req.file.mimetype.startsWith('image/')) {
-      return res.status(400).json({ message: 'Fichier image invalide' });
-    }
-    next();
-  },
+  ...withFile('image', (mimetype) => mimetype.startsWith('image/'), 'Fichier image invalide'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendImage,
+);
+
+// POST /message/file — upload a file message to Cloudinary
+router.post(
+  '/file',
+  authMiddleware,
+  ...withFile('file', (mimetype) => Boolean(mimetype), 'Fichier invalide'),
+  body('conversationId').isUUID().withMessage('conversationId invalide'),
+  validate,
+  messageController.sendFile,
+);
+
+// POST /message/audio — upload an audio message to Cloudinary
+router.post(
+  '/audio',
+  authMiddleware,
+  ...withFile('audio', (mimetype) => mimetype.startsWith('audio/'), 'Fichier audio invalide'),
+  body('conversationId').isUUID().withMessage('conversationId invalide'),
+  validate,
+  messageController.sendAudio,
 );
 
 // GET /message/:conversationId — get messages for a conversation
@@ -71,6 +92,24 @@ router.delete(
   param('id').isUUID().withMessage('id invalide'),
   validate,
   messageController.deleteMessage,
+);
+
+// POST /message/:id/hide — hide message only for current user
+router.post(
+  '/:id/hide',
+  authMiddleware,
+  param('id').isUUID().withMessage('id invalide'),
+  validate,
+  messageController.hideMessageForMe,
+);
+
+// POST /message/:id/unhide — unhide message for current user
+router.post(
+  '/:id/unhide',
+  authMiddleware,
+  param('id').isUUID().withMessage('id invalide'),
+  validate,
+  messageController.unhideMessageForMe,
 );
 
 module.exports = router;

@@ -11,6 +11,9 @@ router.post('/init', identityController.initIdentity);
 // GET /identity/me — get current user (requires token)
 router.get('/me', authMiddleware, identityController.getMe);
 
+// GET /identity/session-token — issue a fresh bearer token for current session
+router.get('/session-token', authMiddleware, identityController.issueSessionToken);
+
 // PATCH /identity/pseudo — regenerate pseudo + avatar
 router.patch('/pseudo', authMiddleware, identityController.updatePseudo);
 

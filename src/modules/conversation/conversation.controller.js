@@ -1,4 +1,5 @@
 const conversationService = require('./conversation.service');
+const { getIO } = require('../../config/socket');
 
 const startConversation = async (req, res, next) => {
   try {
@@ -6,6 +7,16 @@ const startConversation = async (req, res, next) => {
     if (!inviteCode) return res.status(400).json({ message: 'inviteCode requis' });
 
     const conversation = await conversationService.startConversation(inviteCode, req.user.id);
+
+    // Notify the link owner about the new conversation so the mobile app
+    // refreshes its list instantly instead of waiting for the next poll.
+    try {
+      const io = getIO();
+      io.to(`user:${conversation.owner_id}`).emit('new_conversation', conversation);
+    } catch (_) {
+      // Socket not initialized — skip
+    }
+
     res.status(201).json(conversation);
   } catch (error) {
     next(error);
