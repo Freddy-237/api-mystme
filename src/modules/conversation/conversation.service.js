@@ -21,7 +21,14 @@ const startConversation = async (inviteCode, anonymousUserId) => {
 
   // Check if conversation already exists for this link + anonymous user
   const existing = await conversationRepository.findByLinkAndAnonymous(link.id, anonymousUserId);
-  if (existing) return existing;
+  if (existing) {
+    // If either participant had archived/deleted this thread, re-open it.
+    await conversationRepository.reactivateForUsers(existing.id, [
+      link.owner_id,
+      anonymousUserId,
+    ]);
+    return existing;
+  }
 
   // Create new conversation
   const conversation = await conversationRepository.createConversation({

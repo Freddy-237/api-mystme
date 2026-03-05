@@ -34,6 +34,24 @@ const findByLinkAndAnonymous = async (linkId, anonymousId) => {
   return result.rows[0];
 };
 
+/**
+ * Reactivate visibility for one or more users on a conversation.
+ * This is used when an existing conversation is reopened from an invite link.
+ */
+const reactivateForUsers = async (conversationId, userIds) => {
+  const ids = Array.from(new Set((userIds || []).filter(Boolean)));
+  if (ids.length === 0) return;
+
+  await pool.query(
+    `INSERT INTO conversation_user_status (conversation_id, user_id, status, updated_at)
+     SELECT $1, uid, 'active', NOW()
+     FROM UNNEST($2::uuid[]) AS uid
+     ON CONFLICT (conversation_id, user_id)
+     DO UPDATE SET status = 'active', updated_at = NOW()`,
+    [conversationId, ids]
+  );
+};
+
 const updateStatus = async (id, status) => {
   const result = await pool.query(
     'UPDATE conversations SET status = $1 WHERE id = $2 RETURNING *',
@@ -140,6 +158,7 @@ module.exports = {
   findByParticipant,
   findByParticipantWithUnread,
   findByLinkAndAnonymous,
+  reactivateForUsers,
   updateStatus,
   blockConversation,
   archiveConversation,
