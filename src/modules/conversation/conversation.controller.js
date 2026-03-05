@@ -1,5 +1,6 @@
 const conversationService = require('./conversation.service');
 const { getIO } = require('../../config/socket');
+const logger = require('../../utils/logger');
 
 const startConversation = async (req, res, next) => {
   try {
@@ -12,9 +13,18 @@ const startConversation = async (req, res, next) => {
     // refreshes its list instantly instead of waiting for the next poll.
     try {
       const io = getIO();
-      io.to(`user:${conversation.owner_id}`).emit('new_conversation', conversation);
-    } catch (_) {
-      // Socket not initialized — skip
+      const room = `user:${conversation.owner_id}`;
+      const sockets = await io.in(room).fetchSockets();
+      logger.info({
+        event: 'new_conversation_emit',
+        room,
+        ownerId: conversation.owner_id,
+        conversationId: conversation.id,
+        socketsInRoom: sockets.length,
+      }, 'emitting new_conversation');
+      io.to(room).emit('new_conversation', conversation);
+    } catch (err) {
+      logger.error({ err }, 'socket emit failed for new_conversation');
     }
 
     res.status(201).json(conversation);
