@@ -2,12 +2,13 @@ const { randomUUID: uuidv4 } = require('crypto');
 const messageRepository = require('./message.repository');
 const conversationRepository = require('../conversation/conversation.repository');
 const subscriptionService = require('../subscription/subscription.service');
+const AppError = require('../../utils/AppError');
 
 const assertConversationParticipant = async (conversationId, userId) => {
   const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
+  if (!conv) throw new AppError('Conversation introuvable', 404);
   if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
+    throw new AppError('Non autorisé', 403);
   }
   return conv;
 };
@@ -15,7 +16,7 @@ const assertConversationParticipant = async (conversationId, userId) => {
 const assertConversationWritable = async (conversationId, senderId) => {
   const conv = await assertConversationParticipant(conversationId, senderId);
   if (conv.status === 'blocked') {
-    throw Object.assign(new Error('Conversation bloquée'), { statusCode: 403 });
+    throw new AppError('Conversation bloquée', 403);
   }
 
   if (conv.started_at != null) {
@@ -25,7 +26,7 @@ const assertConversationWritable = async (conversationId, senderId) => {
       // Premium users or single-unlock buyers can bypass expiry.
       const unlocked = await subscriptionService.isConversationUnlocked(senderId, conversationId);
       if (!unlocked) {
-        throw Object.assign(new Error('Conversation expirée'), { statusCode: 403 });
+        throw new AppError('Conversation expirée', 403);
       }
     }
   }
@@ -51,7 +52,7 @@ const sendMessage = async (conversationId, senderId, content, replyToMessageId) 
   if (replyToMessageId) {
     const target = await messageRepository.findById(replyToMessageId);
     if (!target || target.conversation_id !== conversationId || target.is_deleted) {
-      throw Object.assign(new Error('Message de réponse invalide'), { statusCode: 400 });
+      throw new AppError('Message de réponse invalide', 400);
     }
   }
 
@@ -74,7 +75,7 @@ const getMessages = async (conversationId, userId, limit, offset) => {
 
 const hideMessageForMe = async (messageId, userId) => {
   const msg = await messageRepository.findById(messageId);
-  if (!msg) throw Object.assign(new Error('Message introuvable'), { statusCode: 404 });
+  if (!msg) throw new AppError('Message introuvable', 404);
 
   await assertConversationParticipant(msg.conversation_id, userId);
 
@@ -83,7 +84,7 @@ const hideMessageForMe = async (messageId, userId) => {
 
 const unhideMessageForMe = async (messageId, userId) => {
   const msg = await messageRepository.findById(messageId);
-  if (!msg) throw Object.assign(new Error('Message introuvable'), { statusCode: 404 });
+  if (!msg) throw new AppError('Message introuvable', 404);
 
   await assertConversationParticipant(msg.conversation_id, userId);
 
@@ -92,9 +93,9 @@ const unhideMessageForMe = async (messageId, userId) => {
 
 const deleteMessage = async (messageId, userId) => {
   const msg = await messageRepository.findById(messageId);
-  if (!msg) throw Object.assign(new Error('Message introuvable'), { statusCode: 404 });
+  if (!msg) throw new AppError('Message introuvable', 404);
   if (msg.sender_id !== userId) {
-    throw Object.assign(new Error('Non autorisé — seul l\'auteur peut supprimer'), { statusCode: 403 });
+    throw new AppError('Non autorisé — seul l\'auteur peut supprimer', 403);
   }
   const deleted = await messageRepository.softDelete(messageId);
   return deleted;

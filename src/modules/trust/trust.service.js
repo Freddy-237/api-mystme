@@ -1,5 +1,6 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const trustRepository = require('./trust.repository');
+const AppError = require('../../utils/AppError');
 
 /**
  * Trust levels: new → known → trusted → revealed
@@ -22,7 +23,7 @@ const getTrust = async (conversationId) => {
 
 const upgradeTrust = async (conversationId, targetStatus) => {
   const current = await trustRepository.findByConversation(conversationId);
-  if (!current) throw Object.assign(new Error('Trust non initialisé'), { statusCode: 404 });
+  if (!current) throw new AppError('Trust non initialisé', 404);
 
   // If a valid target is provided, jump directly to it (must be higher).
   if (targetStatus && TRUST_LEVELS.includes(targetStatus)) {

@@ -186,161 +186,55 @@ const unhideMessageForMe = async (req, res, next) => {
   }
 };
 
-const sendVideo = async (req, res, next) => {
-  try {
-    const { conversationId } = req.body;
-    const file = req.file;
+// ---------------------------------------------------------------------------
+// Generic media upload factory — replaces 4 near-identical handlers
+// ---------------------------------------------------------------------------
 
-    if (!conversationId || !file) {
-      return res.status(400).json({ message: 'conversationId et vidéo requis' });
-    }
-
-    const mediaUrl = await uploadToCloudinaryVideo(file.buffer, conversationId);
-    const message = await messageService.sendVideoMessage(
-      conversationId,
-      req.user.id,
-      mediaUrl
-    );
-
-    await activateConversationIfNeeded(conversationId);
-
-    try {
-      const io = getIO();
-      io.to(conversationId).emit('new_message', message);
-      const recipientId = await resolveRecipientId(conversationId, req.user.id);
-      if (recipientId) {
-        io.to(`user:${recipientId}`).emit('new_message', message);
-      }
-    } catch (_) {}
-
-    await notifyRecipient({
-      conversationId,
-      senderId: req.user.id,
-      preview: '🎥 Vidéo reçue',
-    });
-
-    res.status(201).json(message);
-  } catch (error) {
-    next(error);
-  }
+const MEDIA_CONFIG = {
+  video: { uploadFn: uploadToCloudinaryVideo, serviceFn: 'sendVideoMessage', fieldLabel: 'vidéo', preview: '🎥 Vidéo reçue' },
+  image: { uploadFn: uploadToCloudinaryImage, serviceFn: 'sendImageMessage', fieldLabel: 'image', preview: '🖼️ Image reçue' },
+  file:  { uploadFn: uploadToCloudinaryFile,  serviceFn: 'sendFileMessage',  fieldLabel: 'fichier', preview: '📎 Fichier reçu' },
+  audio: { uploadFn: uploadToCloudinaryAudio, serviceFn: 'sendAudioMessage', fieldLabel: 'audio', preview: '🎤 Audio reçu' },
 };
 
-const sendImage = async (req, res, next) => {
-  try {
-    const { conversationId } = req.body;
-    const file = req.file;
-
-    if (!conversationId || !file) {
-      return res.status(400).json({ message: 'conversationId et image requis' });
-    }
-
-    const mediaUrl = await uploadToCloudinaryImage(file.buffer, conversationId);
-    const message = await messageService.sendImageMessage(
-      conversationId,
-      req.user.id,
-      mediaUrl
-    );
-
-    await activateConversationIfNeeded(conversationId);
-
+const createMediaHandler = (mediaType) => {
+  const { uploadFn, serviceFn, fieldLabel, preview } = MEDIA_CONFIG[mediaType];
+  return async (req, res, next) => {
     try {
-      const io = getIO();
-      io.to(conversationId).emit('new_message', message);
-      const recipientId = await resolveRecipientId(conversationId, req.user.id);
-      if (recipientId) {
-        io.to(`user:${recipientId}`).emit('new_message', message);
+      const { conversationId } = req.body;
+      const file = req.file;
+
+      if (!conversationId || !file) {
+        return res.status(400).json({ message: `conversationId et ${fieldLabel} requis` });
       }
-    } catch (_) {}
 
-    await notifyRecipient({
-      conversationId,
-      senderId: req.user.id,
-      preview: '🖼️ Image reçue',
-    });
+      const mediaUrl = await uploadFn(file.buffer, conversationId);
+      const message = await messageService[serviceFn](conversationId, req.user.id, mediaUrl);
 
-    res.status(201).json(message);
-  } catch (error) {
-    next(error);
-  }
+      await activateConversationIfNeeded(conversationId);
+
+      try {
+        const io = getIO();
+        io.to(conversationId).emit('new_message', message);
+        const recipientId = await resolveRecipientId(conversationId, req.user.id);
+        if (recipientId) {
+          io.to(`user:${recipientId}`).emit('new_message', message);
+        }
+      } catch (_) {}
+
+      await notifyRecipient({ conversationId, senderId: req.user.id, preview });
+
+      res.status(201).json(message);
+    } catch (error) {
+      next(error);
+    }
+  };
 };
 
-const sendFile = async (req, res, next) => {
-  try {
-    const { conversationId } = req.body;
-    const file = req.file;
-
-    if (!conversationId || !file) {
-      return res.status(400).json({ message: 'conversationId et fichier requis' });
-    }
-
-    const mediaUrl = await uploadToCloudinaryFile(file.buffer, conversationId);
-    const message = await messageService.sendFileMessage(
-      conversationId,
-      req.user.id,
-      mediaUrl
-    );
-
-    await activateConversationIfNeeded(conversationId);
-
-    try {
-      const io = getIO();
-      io.to(conversationId).emit('new_message', message);
-      const recipientId = await resolveRecipientId(conversationId, req.user.id);
-      if (recipientId) {
-        io.to(`user:${recipientId}`).emit('new_message', message);
-      }
-    } catch (_) {}
-
-    await notifyRecipient({
-      conversationId,
-      senderId: req.user.id,
-      preview: '📎 Fichier reçu',
-    });
-
-    res.status(201).json(message);
-  } catch (error) {
-    next(error);
-  }
-};
-
-const sendAudio = async (req, res, next) => {
-  try {
-    const { conversationId } = req.body;
-    const file = req.file;
-
-    if (!conversationId || !file) {
-      return res.status(400).json({ message: 'conversationId et audio requis' });
-    }
-
-    const mediaUrl = await uploadToCloudinaryAudio(file.buffer, conversationId);
-    const message = await messageService.sendAudioMessage(
-      conversationId,
-      req.user.id,
-      mediaUrl
-    );
-
-    await activateConversationIfNeeded(conversationId);
-
-    try {
-      const io = getIO();
-      io.to(conversationId).emit('new_message', message);
-      const recipientId = await resolveRecipientId(conversationId, req.user.id);
-      if (recipientId) {
-        io.to(`user:${recipientId}`).emit('new_message', message);
-      }
-    } catch (_) {}
-
-    await notifyRecipient({
-      conversationId,
-      senderId: req.user.id,
-      preview: '🎤 Audio reçu',
-    });
-
-    res.status(201).json(message);
-  } catch (error) {
-    next(error);
-  }
-};
+const sendVideo = createMediaHandler('video');
+const sendImage = createMediaHandler('image');
+const sendFile = createMediaHandler('file');
+const sendAudio = createMediaHandler('audio');
 
 module.exports = {
   sendMessage,

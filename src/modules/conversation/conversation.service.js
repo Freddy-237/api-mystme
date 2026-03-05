@@ -3,6 +3,7 @@ const conversationRepository = require('./conversation.repository');
 const linkRepository = require('../link/link.repository');
 const identityRepository = require('../identity/identity.repository');
 const trustService = require('../trust/trust.service');
+const AppError = require('../../utils/AppError');
 
 /**
  * Start a conversation via an invite code.
@@ -11,11 +12,11 @@ const trustService = require('../trust/trust.service');
 const startConversation = async (inviteCode, anonymousUserId) => {
   // Find the link
   const link = await linkRepository.findByCode(inviteCode);
-  if (!link) throw Object.assign(new Error('Lien introuvable'), { statusCode: 404 });
+  if (!link) throw new AppError('Lien introuvable', 404);
 
   // Prevent self-conversations
   if (link.owner_id === anonymousUserId) {
-    throw Object.assign(new Error('Vous ne pouvez pas démarrer une conversation avec vous-même'), { statusCode: 400 });
+    throw new AppError('Vous ne pouvez pas démarrer une conversation avec vous-même', 400);
   }
 
   // Check if conversation already exists for this link + anonymous user
@@ -58,13 +59,18 @@ const resolveLink = async (inviteCode, anonymousUserId) => {
   };
 };
 
-const getConversation = async (conversationId, userId) => {
+/** Assert user is a participant of the conversation, return the conversation. */
+const assertParticipant = async (conversationId, userId) => {
   const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
+  if (!conv) throw new AppError('Conversation introuvable', 404);
   if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
+    throw new AppError('Non autorisé', 403);
   }
   return conv;
+};
+
+const getConversation = async (conversationId, userId) => {
+  return assertParticipant(conversationId, userId);
 };
 
 const getMyConversations = async (userId) => {
@@ -72,38 +78,22 @@ const getMyConversations = async (userId) => {
 };
 
 const blockConversation = async (conversationId, userId) => {
-  const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
-  if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
-  }
+  await assertParticipant(conversationId, userId);
   return conversationRepository.blockConversation(conversationId);
 };
 
 const archiveConversation = async (conversationId, userId) => {
-  const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
-  if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
-  }
+  await assertParticipant(conversationId, userId);
   return conversationRepository.archiveConversation(conversationId, userId);
 };
 
 const deleteConversation = async (conversationId, userId) => {
-  const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
-  if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
-  }
+  await assertParticipant(conversationId, userId);
   return conversationRepository.softDeleteConversation(conversationId, userId);
 };
 
 const markAsRead = async (conversationId, userId) => {
-  const conv = await conversationRepository.findById(conversationId);
-  if (!conv) throw Object.assign(new Error('Conversation introuvable'), { statusCode: 404 });
-  if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
-    throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
-  }
+  await assertParticipant(conversationId, userId);
   await conversationRepository.markConversationRead(conversationId, userId);
   return { success: true };
 };

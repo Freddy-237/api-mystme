@@ -2,6 +2,7 @@ const { randomUUID: uuidv4 } = require('crypto');
 const repo = require('./subscription.repository');
 const { verifyAppleReceipt, verifyGoogleReceipt } = require('../../services/receipt.service');
 const logger = require('../../utils/logger');
+const AppError = require('../../utils/AppError');
 
 /**
  * Product IDs (must match App Store Connect & Google Play Console).
@@ -18,7 +19,7 @@ const verifySubscription = async ({ userId, productId, store, purchaseToken, exp
   // Server-to-server receipt validation.
   const receipt = await _validateReceipt(store, purchaseToken, productId, /* isSub */ true);
   if (!receipt.valid) {
-    throw Object.assign(new Error('Reçu invalide'), { statusCode: 400 });
+    throw new AppError('Reçu invalide', 400);
   }
 
   const sub = await repo.createSubscription({
@@ -45,7 +46,7 @@ const verifySubscription = async ({ userId, productId, store, purchaseToken, exp
 const verifyUnlock = async ({ userId, conversationId, productId, store, purchaseToken }) => {
   const receipt = await _validateReceipt(store, purchaseToken, productId || PRODUCTS.UNLOCK_SINGLE, /* isSub */ false);
   if (!receipt.valid) {
-    throw Object.assign(new Error('Reçu invalide'), { statusCode: 400 });
+    throw new AppError('Reçu invalide', 400);
   }
 
   const unlock = await repo.createUnlock({

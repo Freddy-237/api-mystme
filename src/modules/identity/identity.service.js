@@ -3,6 +3,7 @@ const identityRepository = require('./identity.repository');
 const generatePseudo = require('../../utils/generatePseudo');
 const generateAvatar = require('../../utils/generateAvatar');
 const generateToken = require('../../utils/generateToken');
+const AppError = require('../../utils/AppError');
 
 const initIdentity = async () => {
   const id = uuidv4();
@@ -24,7 +25,7 @@ const initIdentity = async () => {
 
 const getMe = async (userId) => {
   const user = await identityRepository.findById(userId);
-  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
   await identityRepository.updateLastSeen(userId);
   return user;
 };
@@ -35,7 +36,7 @@ const getMe = async (userId) => {
  */
 const updatePseudo = async (userId, pseudo) => {
   const user = await identityRepository.findById(userId);
-  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
 
   const newPseudo = pseudo || generatePseudo();
   const newAvatar = generateAvatar(newPseudo);
@@ -49,7 +50,7 @@ const updatePseudo = async (userId, pseudo) => {
  */
 const updateBio = async (userId, bio) => {
   const user = await identityRepository.findById(userId);
-  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
 
   const trimmed = (bio || '').slice(0, 120);
   const updated = await identityRepository.updateBio(userId, trimmed);
@@ -58,11 +59,11 @@ const updateBio = async (userId, bio) => {
 
 const updatePushToken = async (userId, token) => {
   const user = await identityRepository.findById(userId);
-  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
 
   const cleanToken = (token || '').trim();
   if (!cleanToken) {
-    throw Object.assign(new Error('Token push invalide'), { statusCode: 400 });
+    throw new AppError('Token push invalide', 400);
   }
 
   const updated = await identityRepository.updatePushToken(userId, cleanToken);
@@ -71,7 +72,7 @@ const updatePushToken = async (userId, token) => {
 
 const issueSessionToken = async (userId) => {
   const user = await identityRepository.findById(userId);
-  if (!user) throw Object.assign(new Error('Utilisateur introuvable'), { statusCode: 404 });
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
 
   const token = generateToken(user.id);
   return { token };
