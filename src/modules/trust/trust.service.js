@@ -20,9 +20,17 @@ const getTrust = async (conversationId) => {
   return trust;
 };
 
-const upgradeTrust = async (conversationId) => {
+const upgradeTrust = async (conversationId, targetStatus) => {
   const current = await trustRepository.findByConversation(conversationId);
   if (!current) throw Object.assign(new Error('Trust non initialisé'), { statusCode: 404 });
+
+  // If a valid target is provided, jump directly to it (must be higher).
+  if (targetStatus && TRUST_LEVELS.includes(targetStatus)) {
+    const targetIndex = TRUST_LEVELS.indexOf(targetStatus);
+    const currentIndex = TRUST_LEVELS.indexOf(current.status);
+    if (targetIndex <= currentIndex) return current; // already at or above target
+    return trustRepository.updateStatus(conversationId, targetStatus);
+  }
 
   const currentIndex = TRUST_LEVELS.indexOf(current.status);
   if (currentIndex >= TRUST_LEVELS.length - 1) {

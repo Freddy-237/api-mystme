@@ -12,12 +12,18 @@ const createUser = async (user) => {
 };
 
 const findById = async (id) => {
-  const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+  const result = await pool.query(
+    'SELECT id, anonymous_uid, pseudo, avatar_url, bio, last_seen_at, created_at FROM users WHERE id = $1',
+    [id]
+  );
   return result.rows[0];
 };
 
 const findByAnonymousUid = async (anonymousUid) => {
-  const result = await pool.query('SELECT * FROM users WHERE anonymous_uid = $1', [anonymousUid]);
+  const result = await pool.query(
+    'SELECT id, anonymous_uid, pseudo, avatar_url, bio, last_seen_at, created_at FROM users WHERE anonymous_uid = $1',
+    [anonymousUid]
+  );
   return result.rows[0];
 };
 

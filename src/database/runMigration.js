@@ -4,7 +4,14 @@ const path = require('path');
 const pool = require('../config/database');
 const logger = require('../utils/logger');
 
-const runMigration = async () => {
+/**
+ * Apply all pending SQL migrations.
+ * Safe to call multiple times — uses schema_migrations tracking table.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.closePool=true] — set false when called from server.js
+ */
+const runMigration = async ({ closePool = true } = {}) => {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -68,8 +75,13 @@ const runMigration = async () => {
     logger.error('❌ Erreur lors de la migration:', err.message);
     process.exitCode = 1;
   } finally {
-    await pool.end();
+    if (closePool) await pool.end();
   }
 };
 
-runMigration();
+// Allow direct invocation: node src/database/runMigration.js
+if (require.main === module) {
+  runMigration();
+}
+
+module.exports = runMigration;

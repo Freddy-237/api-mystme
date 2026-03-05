@@ -74,6 +74,30 @@ router.post(
   messageController.sendAudio,
 );
 
+// GET /message/:conversationId/search — search messages in a conversation
+router.get(
+  '/:conversationId/search',
+  authMiddleware,
+  param('conversationId').isUUID().withMessage('conversationId invalide'),
+  query('q').isString().trim().isLength({ min: 1, max: 200 }).withMessage('q requis (1-200 car.)'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit: 1-100'),
+  query('offset').optional().isInt({ min: 0 }).withMessage('offset >= 0'),
+  validate,
+  messageController.searchMessages,
+);
+
+// GET /message/:conversationId/media — get media messages for a conversation
+router.get(
+  '/:conversationId/media',
+  authMiddleware,
+  param('conversationId').isUUID().withMessage('conversationId invalide'),
+  query('type').optional().isIn(['image', 'video', 'audio', 'file']).withMessage('type: image|video|audio|file'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('limit: 1-100'),
+  query('offset').optional().isInt({ min: 0 }).withMessage('offset >= 0'),
+  validate,
+  messageController.getMedia,
+);
+
 // GET /message/:conversationId — get messages for a conversation
 router.get(
   '/:conversationId',

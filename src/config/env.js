@@ -41,11 +41,19 @@ module.exports = {
   csrfHeaderName: process.env.CSRF_HEADER_NAME || 'x-csrf-token',
   dbSsl: parseBool(process.env.DB_SSL, process.env.NODE_ENV === 'production'),
   databaseUrl: process.env.DATABASE_URL || undefined,
+  // When DATABASE_URL is provided (e.g. Railway), individual DB_* vars are not
+  // required — the connection string already contains host, user, db name, etc.
   db: {
-    host: requireInProduction('DB_HOST', process.env.DB_HOST) || 'localhost',
+    host: process.env.DATABASE_URL
+      ? (process.env.DB_HOST || 'localhost')
+      : (requireInProduction('DB_HOST', process.env.DB_HOST) || 'localhost'),
     port: parseInt(process.env.DB_PORT) || 5432,
-    user: requireInProduction('DB_USER', process.env.DB_USER) || 'postgres',
+    user: process.env.DATABASE_URL
+      ? (process.env.DB_USER || 'postgres')
+      : (requireInProduction('DB_USER', process.env.DB_USER) || 'postgres'),
     password: process.env.DB_PASSWORD || '',
-    name: requireInProduction('DB_NAME', process.env.DB_NAME) || 'mystme',
+    name: process.env.DATABASE_URL
+      ? (process.env.DB_NAME || 'mystme')
+      : (requireInProduction('DB_NAME', process.env.DB_NAME) || 'mystme'),
   },
 };

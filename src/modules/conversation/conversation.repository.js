@@ -77,29 +77,49 @@ const findByParticipantWithUnread = async (userId) => {
          AND is_read = FALSE
          AND sender_id != $1
      ) uc ON TRUE
+     LEFT JOIN conversation_user_status cus
+       ON cus.conversation_id = c.id AND cus.user_id = $1
      WHERE (c.owner_id = $1 OR c.anonymous_id = $1)
        AND c.status NOT IN ('deleted', 'blocked')
+       AND COALESCE(cus.status, 'active') NOT IN ('deleted', 'archived')
      ORDER BY COALESCE(lm.created_at, c.created_at) DESC`,
     [userId]
   );
   return result.rows;
 };
 
-const archiveConversation = async (id) => {
-  const result = await pool.query(
-    "UPDATE conversations SET status = 'archived' WHERE id = $1 RETURNING *",
-    [id]
+const archiveConversation = async (id, userId) => {
+  await pool.query(
+    `INSERT INTO conversation_user_status (conversation_id, user_id, status, updated_at)
+     VALUES ($1, $2, 'archived', NOW())
+     ON CONFLICT (conversation_id, user_id)
+     DO UPDATE SET status = 'archived', updated_at = NOW()`,
+    [id, userId]
   );
-  return result.rows[0];
+  return { id, status: 'archived' };
 };
 
-/** Soft-delete a conversation (owner or anonymous can do it). */
-const softDeleteConversation = async (id) => {
+/** Soft-delete a conversation for the calling user only. */
+const softDeleteConversation = async (id, userId) => {
+  await pool.query(
+    `INSERT INTO conversation_user_status (conversation_id, user_id, status, updated_at)
+     VALUES ($1, $2, 'deleted', NOW())
+     ON CONFLICT (conversation_id, user_id)
+     DO UPDATE SET status = 'deleted', updated_at = NOW()`,
+    [id, userId]
+  );
+  return { id, status: 'deleted' };
+};
+
+/** Set started_at to NOW() if not already set (first message trigger). */
+const setStartedAt = async (id) => {
   const result = await pool.query(
-    "UPDATE conversations SET status = 'deleted' WHERE id = $1 RETURNING *",
+    `UPDATE conversations SET started_at = NOW()
+     WHERE id = $1 AND started_at IS NULL
+     RETURNING *`,
     [id]
   );
-  return result.rows[0];
+  return result.rows[0]; // undefined if already set
 };
 
 /** Mark all messages in a conversation as read for a given recipient. */
@@ -125,4 +145,5 @@ module.exports = {
   archiveConversation,
   softDeleteConversation,
   markConversationRead,
+  setStartedAt,
 };

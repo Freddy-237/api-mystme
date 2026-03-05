@@ -19,7 +19,9 @@ const initIdentity = async (req, res, next) => {
     res.cookie(env.authCookieName, data.token, buildCookieOptions(true));
     res.cookie(env.csrfCookieName, csrfToken, buildCookieOptions(false));
 
-    res.status(201).json(data);
+    // Include csrfToken in the response body so cross-origin PWA clients
+    // (which cannot read the cookie) can store it in memory.
+    res.status(201).json({ ...data, csrfToken });
   } catch (error) {
     next(error);
   }
@@ -36,7 +38,15 @@ const getMe = async (req, res, next) => {
 
 const updatePseudo = async (req, res, next) => {
   try {
-    const user = await identityService.updatePseudo(req.user.id, req.body.pseudo);
+    const { pseudo } = req.body;
+    if (!pseudo || typeof pseudo !== 'string') {
+      return res.status(400).json({ message: 'pseudo requis' });
+    }
+    const trimmed = pseudo.trim();
+    if (trimmed.length < 2 || trimmed.length > 30) {
+      return res.status(400).json({ message: 'Le pseudo doit contenir entre 2 et 30 caractères' });
+    }
+    const user = await identityService.updatePseudo(req.user.id, trimmed);
     res.status(200).json(user);
   } catch (error) {
     next(error);
@@ -45,7 +55,15 @@ const updatePseudo = async (req, res, next) => {
 
 const updateBio = async (req, res, next) => {
   try {
-    const user = await identityService.updateBio(req.user.id, req.body.bio);
+    const { bio } = req.body;
+    if (bio !== undefined && typeof bio !== 'string') {
+      return res.status(400).json({ message: 'bio invalide' });
+    }
+    const trimmed = (bio || '').trim();
+    if (trimmed.length > 300) {
+      return res.status(400).json({ message: 'La bio ne doit pas dépasser 300 caractères' });
+    }
+    const user = await identityService.updateBio(req.user.id, trimmed);
     res.status(200).json(user);
   } catch (error) {
     next(error);

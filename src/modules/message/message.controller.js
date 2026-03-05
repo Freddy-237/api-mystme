@@ -1,78 +1,34 @@
 const messageService = require('./message.service');
 const { getIO } = require('../../config/socket');
-const cloudinary = require('../../config/cloudinary');
 const conversationRepository = require('../conversation/conversation.repository');
 const identityRepository = require('../identity/identity.repository');
 const { sendPushToUser } = require('../../services/push.service');
-
-const uploadToCloudinaryVideo = (buffer, conversationId) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'mystme/messages/videos',
-        resource_type: 'video',
-        public_id: `${conversationId}_${Date.now()}`,
-      },
-      (error, result) => {
-        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
-        resolve(result.secure_url);
-      }
-    );
-    stream.end(buffer);
-  });
-
-const uploadToCloudinaryImage = (buffer, conversationId) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'mystme/messages/images',
-        resource_type: 'image',
-        public_id: `${conversationId}_${Date.now()}`,
-      },
-      (error, result) => {
-        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
-        resolve(result.secure_url);
-      }
-    );
-    stream.end(buffer);
-  });
-
-const uploadToCloudinaryFile = (buffer, conversationId) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'mystme/messages/files',
-        resource_type: 'raw',
-        public_id: `${conversationId}_${Date.now()}`,
-      },
-      (error, result) => {
-        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
-        resolve(result.secure_url);
-      }
-    );
-    stream.end(buffer);
-  });
-
-const uploadToCloudinaryAudio = (buffer, conversationId) =>
-  new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: 'mystme/messages/audio',
-        resource_type: 'video',
-        public_id: `${conversationId}_${Date.now()}`,
-      },
-      (error, result) => {
-        if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
-        resolve(result.secure_url);
-      }
-    );
-    stream.end(buffer);
-  });
+const {
+  uploadVideo: uploadToCloudinaryVideo,
+  uploadImage: uploadToCloudinaryImage,
+  uploadFile: uploadToCloudinaryFile,
+  uploadAudio: uploadToCloudinaryAudio,
+} = require('../../services/upload.service');
 
 const resolveRecipientId = async (conversationId, senderId) => {
   const conv = await conversationRepository.findById(conversationId);
   if (!conv) return null;
   return conv.owner_id === senderId ? conv.anonymous_id : conv.owner_id;
+};
+
+/**
+ * If this is the first message in the conversation, set started_at and
+ * notify both participants via a new_conversation socket event.
+ */
+const activateConversationIfNeeded = async (conversationId) => {
+  try {
+    const updated = await conversationRepository.setStartedAt(conversationId);
+    if (updated) {
+      const io = getIO();
+      io.to(`user:${updated.owner_id}`).emit('new_conversation', updated);
+      io.to(`user:${updated.anonymous_id}`).emit('new_conversation', updated);
+    }
+  } catch (_) {}
 };
 
 const notifyRecipient = async ({ conversationId, senderId, preview }) => {
@@ -112,6 +68,9 @@ const sendMessage = async (req, res, next) => {
       replyToMessageId
     );
 
+    // Set started_at on first message & notify both participants about the new conv
+    await activateConversationIfNeeded(conversationId);
+
     // Emit to the conversation room via Socket.io
     try {
       const io = getIO();
@@ -142,6 +101,41 @@ const getMessages = async (req, res, next) => {
     const messages = await messageService.getMessages(
       req.params.conversationId,
       req.user.id,
+      parseInt(limit),
+      parseInt(offset)
+    );
+    res.json(messages);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const searchMessages = async (req, res, next) => {
+  try {
+    const { q, limit = 30, offset = 0 } = req.query;
+    if (!q || !q.trim()) {
+      return res.status(400).json({ message: 'Le paramètre q est requis' });
+    }
+    const messages = await messageService.searchMessages(
+      req.params.conversationId,
+      req.user.id,
+      q.trim(),
+      parseInt(limit),
+      parseInt(offset)
+    );
+    res.json(messages);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getMedia = async (req, res, next) => {
+  try {
+    const { type, limit = 50, offset = 0 } = req.query;
+    const messages = await messageService.getMedia(
+      req.params.conversationId,
+      req.user.id,
+      type || null,
       parseInt(limit),
       parseInt(offset)
     );
@@ -208,6 +202,8 @@ const sendVideo = async (req, res, next) => {
       mediaUrl
     );
 
+    await activateConversationIfNeeded(conversationId);
+
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
@@ -244,6 +240,8 @@ const sendImage = async (req, res, next) => {
       req.user.id,
       mediaUrl
     );
+
+    await activateConversationIfNeeded(conversationId);
 
     try {
       const io = getIO();
@@ -282,6 +280,8 @@ const sendFile = async (req, res, next) => {
       mediaUrl
     );
 
+    await activateConversationIfNeeded(conversationId);
+
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
@@ -319,6 +319,8 @@ const sendAudio = async (req, res, next) => {
       mediaUrl
     );
 
+    await activateConversationIfNeeded(conversationId);
+
     try {
       const io = getIO();
       io.to(conversationId).emit('new_message', message);
@@ -343,6 +345,8 @@ const sendAudio = async (req, res, next) => {
 module.exports = {
   sendMessage,
   getMessages,
+  searchMessages,
+  getMedia,
   deleteMessage,
   hideMessageForMe,
   unhideMessageForMe,

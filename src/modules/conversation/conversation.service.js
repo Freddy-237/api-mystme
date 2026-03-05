@@ -2,6 +2,7 @@ const { randomUUID: uuidv4 } = require('crypto');
 const conversationRepository = require('./conversation.repository');
 const linkRepository = require('../link/link.repository');
 const identityRepository = require('../identity/identity.repository');
+const trustService = require('../trust/trust.service');
 
 /**
  * Start a conversation via an invite code.
@@ -28,6 +29,13 @@ const startConversation = async (inviteCode, anonymousUserId) => {
     anonymous_id: anonymousUserId,
     link_id: link.id,
   });
+
+  // Initialize trust level for the new conversation
+  try {
+    await trustService.initTrust(conversation.id);
+  } catch (_) {
+    // Non-blocking — trust can be initialized later
+  }
 
   return conversation;
 };
@@ -78,7 +86,7 @@ const archiveConversation = async (conversationId, userId) => {
   if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
     throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
   }
-  return conversationRepository.archiveConversation(conversationId);
+  return conversationRepository.archiveConversation(conversationId, userId);
 };
 
 const deleteConversation = async (conversationId, userId) => {
@@ -87,7 +95,7 @@ const deleteConversation = async (conversationId, userId) => {
   if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
     throw Object.assign(new Error('Non autorisé'), { statusCode: 403 });
   }
-  return conversationRepository.softDeleteConversation(conversationId);
+  return conversationRepository.softDeleteConversation(conversationId, userId);
 };
 
 const markAsRead = async (conversationId, userId) => {

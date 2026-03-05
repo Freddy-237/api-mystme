@@ -94,6 +94,61 @@ const unhideMessageForUser = async (messageId, userId) => {
   );
 };
 
+const searchByConversation = async (
+  conversationId,
+  viewerId,
+  searchTerm,
+  limit = 30,
+  offset = 0
+) => {
+  const result = await pool.query(
+    `${baseSelect}
+     LEFT JOIN hidden_messages hm
+       ON hm.message_id = m.id
+      AND hm.user_id = $2
+     WHERE m.conversation_id = $1
+       AND m.is_deleted = FALSE
+       AND hm.message_id IS NULL
+       AND m.content ILIKE $3
+     ORDER BY m.created_at DESC
+     LIMIT $4 OFFSET $5`,
+    [conversationId, viewerId, `%${searchTerm}%`, limit, offset]
+  );
+  return result.rows;
+};
+
+const findMediaByConversation = async (
+  conversationId,
+  viewerId,
+  mediaType,
+  limit = 50,
+  offset = 0
+) => {
+  const typeFilter = mediaType
+    ? 'AND m.media_type = $3'
+    : 'AND m.media_type IS NOT NULL';
+  const params = mediaType
+    ? [conversationId, viewerId, mediaType, limit, offset]
+    : [conversationId, viewerId, limit, offset];
+  const limitIdx = mediaType ? '$4' : '$3';
+  const offsetIdx = mediaType ? '$5' : '$4';
+
+  const result = await pool.query(
+    `${baseSelect}
+     LEFT JOIN hidden_messages hm
+       ON hm.message_id = m.id
+      AND hm.user_id = $2
+     WHERE m.conversation_id = $1
+       AND m.is_deleted = FALSE
+       AND hm.message_id IS NULL
+       ${typeFilter}
+     ORDER BY m.created_at DESC
+     LIMIT ${limitIdx} OFFSET ${offsetIdx}`,
+    params
+  );
+  return result.rows;
+};
+
 module.exports = {
   createMessage,
   findByConversation,
@@ -102,4 +157,6 @@ module.exports = {
   markRead,
   hideMessageForUser,
   unhideMessageForUser,
+  searchByConversation,
+  findMediaByConversation,
 };

@@ -1,6 +1,7 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const messageRepository = require('./message.repository');
 const conversationRepository = require('../conversation/conversation.repository');
+const subscriptionService = require('../subscription/subscription.service');
 
 const assertConversationParticipant = async (conversationId, userId) => {
   const conv = await conversationRepository.findById(conversationId);
@@ -21,7 +22,11 @@ const assertConversationWritable = async (conversationId, senderId) => {
     const expiresAt = new Date(conv.started_at);
     expiresAt.setDate(expiresAt.getDate() + 7);
     if (new Date() > expiresAt) {
-      throw Object.assign(new Error('Conversation expirée'), { statusCode: 403 });
+      // Premium users or single-unlock buyers can bypass expiry.
+      const unlocked = await subscriptionService.isConversationUnlocked(senderId, conversationId);
+      if (!unlocked) {
+        throw Object.assign(new Error('Conversation expirée'), { statusCode: 403 });
+      }
     }
   }
 
@@ -111,6 +116,16 @@ const sendAudioMessage = async (conversationId, senderId, mediaUrl) => {
   return createMediaMessage(conversationId, senderId, mediaUrl, 'audio', '[audio]');
 };
 
+const searchMessages = async (conversationId, userId, searchTerm, limit, offset) => {
+  await assertConversationParticipant(conversationId, userId);
+  return messageRepository.searchByConversation(conversationId, userId, searchTerm, limit, offset);
+};
+
+const getMedia = async (conversationId, userId, mediaType, limit, offset) => {
+  await assertConversationParticipant(conversationId, userId);
+  return messageRepository.findMediaByConversation(conversationId, userId, mediaType, limit, offset);
+};
+
 module.exports = {
   sendMessage,
   getMessages,
@@ -121,4 +136,6 @@ module.exports = {
   sendImageMessage,
   sendFileMessage,
   sendAudioMessage,
+  searchMessages,
+  getMedia,
 };

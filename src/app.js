@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
+const Sentry = require('./config/sentry');
 const env = require('./config/env');
 const pool = require('./config/database');
 
@@ -13,6 +14,7 @@ const conversationRoutes = require('./modules/conversation/conversation.routes')
 const messageRoutes = require('./modules/message/message.routes');
 const trustRoutes = require('./modules/trust/trust.routes');
 const moderationRoutes = require('./modules/moderation/moderation.routes');
+const subscriptionRoutes = require('./modules/subscription/subscription.routes');
 
 // Import middlewares
 const errorMiddleware = require('./middlewares/error.middleware');
@@ -23,7 +25,14 @@ const app = express();
 app.set('trust proxy', 1);
 
 // --- Security headers ---
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Let the PWA/Vercel handle CSP
+    crossOriginEmbedderPolicy: false, // Required for cross-origin media (Cloudinary)
+    hsts: { maxAge: 63_072_000, includeSubDomains: true, preload: true },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  }),
+);
 
 // --- Global middlewares ---
 app.use(
@@ -78,6 +87,7 @@ app.use('/conversation', conversationRoutes);
 app.use('/message', messageRoutes);
 app.use('/trust', trustRoutes);
 app.use('/moderation', moderationRoutes);
+app.use('/subscription', subscriptionRoutes);
 
 // --- 404 ---
 app.use((_req, res) => {

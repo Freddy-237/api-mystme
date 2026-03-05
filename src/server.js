@@ -5,14 +5,16 @@ const { initSocket } = require('./config/socket');
 const pool = require('./config/database');
 const logger = require('./utils/logger');
 const env = require('./config/env');
+const runMigration = require('./database/runMigration');
 
 const server = http.createServer(app);
 
 // Init Socket.io
 initSocket(server);
 
-// Test DB connection then start
-pool.query('SELECT NOW()')
+// Run migrations → test DB → start
+runMigration({ closePool: false })
+  .then(() => pool.query('SELECT NOW()'))
   .then(() => {
     logger.info('✅ Connected to PostgreSQL');
     server.listen(env.port, () => {
@@ -20,7 +22,7 @@ pool.query('SELECT NOW()')
     });
   })
   .catch((err) => {
-    logger.error('❌ Failed to connect to PostgreSQL', err.message);
+    logger.error('❌ Failed to start server', err.message);
     process.exit(1);
   });
 
