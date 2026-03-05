@@ -29,6 +29,18 @@ const resolveLink = async (req, res, next) => {
     if (!inviteCode) return res.status(400).json({ message: 'inviteCode requis' });
 
     const result = await conversationService.resolveLink(inviteCode, req.user.id);
+
+    // Notify the link owner about the new conversation (same as startConversation)
+    try {
+      const io = getIO();
+      io.to(`user:${result.ownerId}`).emit('new_conversation', {
+        id: result.conversationId,
+        owner_id: result.ownerId,
+      });
+    } catch (_) {
+      // Socket not initialized — skip
+    }
+
     res.json(result);
   } catch (error) {
     next(error);
