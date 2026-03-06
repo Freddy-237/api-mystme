@@ -32,12 +32,14 @@ const initSocket = (httpServer) => {
     const cookieToken = parseCookies(socket.handshake.headers?.cookie || '')[env.authCookieName];
     const token = authToken || authHeaderToken || cookieToken;
     if (!token) {
+      logger.warn({ socketId: socket.id }, 'socket auth: no token');
       return next(new Error('Authentication required'));
     }
     try {
       socket.user = jwt.verify(token, env.jwtSecret);
       next();
-    } catch (_) {
+    } catch (err) {
+      logger.warn({ socketId: socket.id, err: err.message }, 'socket auth: invalid token');
       return next(new Error('Invalid token'));
     }
   });
