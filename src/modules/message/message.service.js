@@ -3,18 +3,40 @@ const messageRepository = require('./message.repository');
 const conversationRepository = require('../conversation/conversation.repository');
 const subscriptionService = require('../subscription/subscription.service');
 const AppError = require('../../utils/AppError');
+const logger = require('../../utils/logger');
 
 const assertConversationParticipant = async (conversationId, userId) => {
+  logger.info({ conversationId, userId }, 'assertConversationParticipant:start');
   const conv = await conversationRepository.findById(conversationId);
   if (!conv) throw new AppError('Conversation introuvable', 404);
   if (conv.owner_id !== userId && conv.anonymous_id !== userId) {
     throw new AppError('Non autorisé', 403);
   }
+  logger.info(
+    {
+      conversationId,
+      userId,
+      ownerId: conv.owner_id,
+      anonymousId: conv.anonymous_id,
+      status: conv.status,
+      startedAt: conv.started_at,
+    },
+    'assertConversationParticipant:ok',
+  );
   return conv;
 };
 
 const assertConversationWritable = async (conversationId, senderId) => {
   const conv = await assertConversationParticipant(conversationId, senderId);
+  logger.info(
+    {
+      conversationId,
+      senderId,
+      status: conv.status,
+      startedAt: conv.started_at,
+    },
+    'assertConversationWritable:check',
+  );
   if (conv.status === 'blocked') {
     throw new AppError('Conversation bloquée', 403);
   }
@@ -25,18 +47,27 @@ const assertConversationWritable = async (conversationId, senderId) => {
     if (new Date() > expiresAt) {
       // Premium users or single-unlock buyers can bypass expiry.
       const unlocked = await subscriptionService.isConversationUnlocked(senderId, conversationId);
+      logger.info(
+        { conversationId, senderId, unlocked },
+        'assertConversationWritable:expired-check',
+      );
       if (!unlocked) {
         throw new AppError('Conversation expirée', 403);
       }
     }
   }
 
+  logger.info({ conversationId, senderId }, 'assertConversationWritable:ok');
   return conv;
 };
 
 const createMediaMessage = async (conversationId, senderId, mediaUrl, mediaType, content) => {
+  logger.info(
+    { conversationId, senderId, mediaType, mediaUrl, content },
+    'createMediaMessage:start',
+  );
   await assertConversationWritable(conversationId, senderId);
-  return messageRepository.createMessage({
+  const message = await messageRepository.createMessage({
     id: uuidv4(),
     conversation_id: conversationId,
     sender_id: senderId,
@@ -44,6 +75,17 @@ const createMediaMessage = async (conversationId, senderId, mediaUrl, mediaType,
     media_url: mediaUrl,
     media_type: mediaType,
   });
+  logger.info(
+    {
+      conversationId,
+      senderId,
+      mediaType,
+      messageId: message?.id,
+      createdAt: message?.created_at,
+    },
+    'createMediaMessage:success',
+  );
+  return message;
 };
 
 const sendMessage = async (conversationId, senderId, content, replyToMessageId) => {

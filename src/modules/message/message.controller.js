@@ -204,6 +204,18 @@ const createMediaHandler = (mediaType) => {
     try {
       const { conversationId } = req.body;
       const file = req.file;
+      logger.info(
+        {
+          mediaType,
+          conversationId,
+          userId: req.user?.id,
+          hasFile: !!file,
+          mimetype: file?.mimetype,
+          originalname: file?.originalname,
+          size: file?.size,
+        },
+        'messageController.createMediaHandler:start',
+      );
 
       if (!conversationId || !file) {
         return res.status(400).json({ message: `conversationId et ${fieldLabel} requis` });
@@ -212,13 +224,31 @@ const createMediaHandler = (mediaType) => {
       let mediaUrl;
       try {
         mediaUrl = await uploadFn(file.buffer, conversationId);
+        logger.info(
+          { mediaType, conversationId, userId: req.user.id, mediaUrl },
+          'messageController.createMediaHandler:upload-ok',
+        );
       } catch (uploadErr) {
         logger.error({ err: uploadErr, mediaType, conversationId }, 'Cloudinary upload failed');
         return res.status(502).json({ message: `Upload ${fieldLabel} échoué`, detail: uploadErr.message });
       }
       const message = await messageService[serviceFn](conversationId, req.user.id, mediaUrl);
+      logger.info(
+        {
+          mediaType,
+          conversationId,
+          userId: req.user.id,
+          messageId: message?.id,
+          mediaTypeSaved: message?.media_type,
+        },
+        'messageController.createMediaHandler:message-created',
+      );
 
       await activateConversationIfNeeded(conversationId);
+      logger.info(
+        { mediaType, conversationId, userId: req.user.id },
+        'messageController.createMediaHandler:conversation-activated',
+      );
 
       try {
         const io = getIO();
@@ -230,9 +260,23 @@ const createMediaHandler = (mediaType) => {
       } catch (_) {}
 
       await notifyRecipient({ conversationId, senderId: req.user.id, preview });
+      logger.info(
+        { mediaType, conversationId, userId: req.user.id, messageId: message?.id },
+        'messageController.createMediaHandler:done',
+      );
 
       res.status(201).json(message);
     } catch (error) {
+      logger.error(
+        {
+          err: error,
+          mediaType,
+          conversationId: req.body?.conversationId,
+          userId: req.user?.id,
+          hasFile: !!req.file,
+        },
+        'messageController.createMediaHandler:unhandled-error',
+      );
       next(error);
     }
   };

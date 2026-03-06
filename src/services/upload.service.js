@@ -2,11 +2,44 @@
  * Cloudinary upload helpers — extracted from message.controller.js.
  */
 const cloudinary = require('../config/cloudinary');
+const logger = require('../utils/logger');
 
 const uploadStream = (buffer, options) =>
   new Promise((resolve, reject) => {
+    logger.info(
+      {
+        folder: options.folder,
+        resourceType: options.resource_type,
+        publicId: options.public_id,
+        bytes: buffer?.length || 0,
+      },
+      'Cloudinary upload start',
+    );
     const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
-      if (error || !result) return reject(error || new Error('Upload Cloudinary échoué'));
+      if (error || !result) {
+        logger.error(
+          {
+            err: error,
+            folder: options.folder,
+            resourceType: options.resource_type,
+            publicId: options.public_id,
+            bytes: buffer?.length || 0,
+          },
+          'Cloudinary upload callback failed',
+        );
+        return reject(error || new Error('Upload Cloudinary échoué'));
+      }
+      logger.info(
+        {
+          folder: options.folder,
+          resourceType: options.resource_type,
+          publicId: options.public_id,
+          secureUrl: result.secure_url,
+          bytes: result.bytes,
+          format: result.format,
+        },
+        'Cloudinary upload success',
+      );
       resolve(result.secure_url);
     });
     stream.end(buffer);
