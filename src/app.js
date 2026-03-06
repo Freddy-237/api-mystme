@@ -72,11 +72,12 @@ app.use('/conversation',  rateLimit({ windowMs: 60_000, max: 40, standardHeaders
 
 // --- Health check ---
 app.get('/health', async (_req, res) => {
+  const cloudinaryOk = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'ok', db: 'up', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', db: 'up', cloudinary: cloudinaryOk ? 'configured' : 'MISSING', timestamp: new Date().toISOString() });
   } catch {
-    res.status(503).json({ status: 'degraded', db: 'down', timestamp: new Date().toISOString() });
+    res.status(503).json({ status: 'degraded', db: 'down', cloudinary: cloudinaryOk ? 'configured' : 'MISSING', timestamp: new Date().toISOString() });
   }
 });
 
