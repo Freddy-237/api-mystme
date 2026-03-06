@@ -1,5 +1,6 @@
 const messageService = require('./message.service');
 const { getIO } = require('../../config/socket');
+const logger = require('../../utils/logger');
 const conversationRepository = require('../conversation/conversation.repository');
 const identityRepository = require('../identity/identity.repository');
 const { sendPushToUser } = require('../../services/push.service');
@@ -208,7 +209,13 @@ const createMediaHandler = (mediaType) => {
         return res.status(400).json({ message: `conversationId et ${fieldLabel} requis` });
       }
 
-      const mediaUrl = await uploadFn(file.buffer, conversationId);
+      let mediaUrl;
+      try {
+        mediaUrl = await uploadFn(file.buffer, conversationId);
+      } catch (uploadErr) {
+        logger.error({ err: uploadErr, mediaType, conversationId }, 'Cloudinary upload failed');
+        return res.status(502).json({ message: `Upload ${fieldLabel} échoué`, detail: uploadErr.message });
+      }
       const message = await messageService[serviceFn](conversationId, req.user.id, mediaUrl);
 
       await activateConversationIfNeeded(conversationId);
