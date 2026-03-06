@@ -179,6 +179,7 @@ module.exports = {
   sendImageMessage,
   sendFileMessage,
   sendAudioMessage,
+  createMediaMessage,
   searchMessages,
   getMedia,
 };
