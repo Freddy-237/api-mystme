@@ -120,7 +120,7 @@ const initSocket = (httpServer) => {
     socket.on('send_media', async (data, ack) => {
       if (!canSendMedia()) return;
       const userId = socket.user?.userId;
-      const { conversationId, mediaType, filename, bytes } = data || {};
+      const { conversationId, mediaType, filename, bytes, caption } = data || {};
 
       if (!conversationId || !mediaType || !bytes) {
         const errMsg = 'Payload invalide (conversationId, mediaType, bytes requis)';
@@ -168,7 +168,7 @@ const initSocket = (httpServer) => {
         // Persist message
         const messageService = require('../modules/message/message.service');
         const message = await messageService.createMediaMessage(
-          conversationId, userId, mediaUrl, mediaType, '',
+          conversationId, userId, mediaUrl, mediaType, caption || '',
         );
         logger.info({ userId, conversationId, messageId: message?.id }, 'send_media:saved');
 
