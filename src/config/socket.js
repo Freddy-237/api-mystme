@@ -20,6 +20,8 @@ const initSocket = (httpServer) => {
       origin: socketOrigin,
       methods: ['GET', 'POST'],
     },
+    // Allow binary payloads up to 30 MB (images + audio via send_media).
+    maxHttpBufferSize: 30 * 1024 * 1024,
   });
 
   // JWT auth middleware — reject connections without a valid token
@@ -46,6 +48,7 @@ const initSocket = (httpServer) => {
   const typingStartG  = socketRateLimit('typing_start',       { windowMs: 2_000,  max: 5  });
   const typingStopG   = socketRateLimit('typing_stop',        { windowMs: 2_000,  max: 5  });
   const readGuard     = socketRateLimit('messages_read',      { windowMs: 5_000,  max: 10 });
+  const sendMediaG    = socketRateLimit('send_media',         { windowMs: 30_000, max: 10 });
 
   io.on('connection', (socket) => {
     const uid = socket.user?.userId ?? socket.id;
@@ -64,6 +67,7 @@ const initSocket = (httpServer) => {
     const canTypingStart = typingStartG(socket);
     const canTypingStop  = typingStopG(socket);
     const canRead       = readGuard(socket);
+    const canSendMedia  = sendMediaG(socket);
 
     // Join a conversation room — verify user is a participant
     socket.on('join_conversation', async (conversationId) => {
@@ -107,6 +111,85 @@ const initSocket = (httpServer) => {
     socket.on('messages_read', ({ conversationId }) => {
       if (!canRead()) return;
       socket.to(conversationId).emit('messages_read', { userId: uid, conversationId });
+    });
+
+    // ── Media upload via socket ──────────────────────────────────────────────
+    // Flutter sends raw bytes; we upload to Cloudinary and broadcast new_message.
+    socket.on('send_media', async (data, ack) => {
+      if (!canSendMedia()) return;
+      const userId = socket.user?.userId;
+      const { conversationId, mediaType, filename, bytes } = data || {};
+
+      if (!conversationId || !mediaType || !bytes) {
+        const errMsg = 'Payload invalide (conversationId, mediaType, bytes requis)';
+        logger.warn({ userId, conversationId, mediaType }, `send_media: ${errMsg}`);
+        if (typeof ack === 'function') ack({ ok: false, error: errMsg });
+        return;
+      }
+
+      try {
+        logger.info({ userId, conversationId, mediaType, filename }, 'send_media:start');
+
+        // Verify participant
+        const pool = require('./database');
+        const check = await pool.query(
+          'SELECT id FROM conversations WHERE id = $1 AND (owner_id = $2 OR anonymous_id = $2)',
+          [conversationId, userId],
+        );
+        if (check.rows.length === 0) {
+          if (typeof ack === 'function') ack({ ok: false, error: 'Non autorisé' });
+          return;
+        }
+
+        // Convert received payload to Buffer
+        let buffer;
+        if (Buffer.isBuffer(bytes)) {
+          buffer = bytes;
+        } else if (Array.isArray(bytes)) {
+          buffer = Buffer.from(bytes);
+        } else {
+          buffer = Buffer.from(Object.values(bytes));
+        }
+        logger.info({ userId, conversationId, mediaType, bufferBytes: buffer.length }, 'send_media:buffer');
+
+        // Upload to Cloudinary
+        const uploadService = require('../services/upload.service');
+        let mediaUrl;
+        switch (mediaType) {
+          case 'image': mediaUrl = await uploadService.uploadImage(buffer, conversationId); break;
+          case 'audio': mediaUrl = await uploadService.uploadAudio(buffer, conversationId); break;
+          case 'video': mediaUrl = await uploadService.uploadVideo(buffer, conversationId); break;
+          default:      mediaUrl = await uploadService.uploadFile(buffer, conversationId);  break;
+        }
+        logger.info({ userId, conversationId, mediaType, mediaUrl }, 'send_media:uploaded');
+
+        // Persist message
+        const messageService = require('../modules/message/message.service');
+        const message = await messageService.createMediaMessage(
+          conversationId, userId, mediaUrl, mediaType, '',
+        );
+        logger.info({ userId, conversationId, messageId: message?.id }, 'send_media:saved');
+
+        // Broadcast to all room participants
+        const msgObj = {
+          id:               message.id,
+          conversation_id:  message.conversation_id,
+          sender_id:        message.sender_id,
+          content:          message.content || '',
+          media_url:        message.media_url,
+          media_type:       message.media_type,
+          is_deleted:       message.is_deleted || false,
+          created_at:       message.created_at,
+          is_read:          false,
+        };
+        io.to(conversationId).emit('new_message', msgObj);
+
+        if (typeof ack === 'function') ack({ ok: true, message: msgObj });
+      } catch (err) {
+        logger.error({ err, userId, conversationId, mediaType }, 'send_media:error');
+        if (typeof ack === 'function') ack({ ok: false, error: err.message });
+        else socket.emit('media_error', { error: err.message, conversationId });
+      }
     });
 
     // Check if a user is online
