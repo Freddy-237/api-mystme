@@ -12,7 +12,16 @@ const createConversation = async (conv) => {
 };
 
 const findById = async (id) => {
-  const result = await pool.query('SELECT * FROM conversations WHERE id = $1', [id]);
+  const result = await pool.query(
+    `SELECT c.*,
+            ou.pseudo AS owner_pseudo,
+            au.pseudo AS anonymous_pseudo
+     FROM conversations c
+     LEFT JOIN users ou ON ou.id = c.owner_id
+     LEFT JOIN users au ON au.id = c.anonymous_id
+     WHERE c.id = $1`,
+    [id]
+  );
   return result.rows[0];
 };
 
@@ -78,8 +87,12 @@ const findByParticipantWithUnread = async (userId) => {
        lm.content          AS last_message,
        lm.sender_id        AS last_message_sender_id,
        lm.created_at       AS last_message_at,
-       COALESCE(uc.cnt, 0) AS unread_count
+       COALESCE(uc.cnt, 0) AS unread_count,
+       ou.pseudo            AS owner_pseudo,
+       au.pseudo            AS anonymous_pseudo
      FROM conversations c
+     LEFT JOIN users ou ON ou.id = c.owner_id
+     LEFT JOIN users au ON au.id = c.anonymous_id
      LEFT JOIN LATERAL (
        SELECT content, sender_id, created_at
        FROM messages
