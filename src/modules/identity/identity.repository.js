@@ -55,6 +55,28 @@ const updatePushToken = async (id, token) => {
   return result.rows[0];
 };
 
+const updateRecoveryKeyHash = async (id, recoveryKeyHash) => {
+  const result = await pool.query(
+    `UPDATE users
+       SET recovery_key_hash = $1,
+           recovery_key_created_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [recoveryKeyHash, id]
+  );
+  return result.rows[0];
+};
+
+const findByRecoveryKeyHash = async (recoveryKeyHash) => {
+  const result = await pool.query(
+    `SELECT id, anonymous_uid, pseudo, avatar_url, bio, last_seen_at, created_at
+       FROM users
+      WHERE recovery_key_hash = $1`,
+    [recoveryKeyHash]
+  );
+  return result.rows[0];
+};
+
 module.exports = {
   createUser,
   findById,
@@ -63,4 +85,6 @@ module.exports = {
   updatePseudoAndAvatar,
   updateBio,
   updatePushToken,
+  updateRecoveryKeyHash,
+  findByRecoveryKeyHash,
 };

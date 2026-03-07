@@ -117,6 +117,28 @@ const issueSessionToken = async (req, res, next) => {
   }
 };
 
+const createRecoveryKey = async (req, res, next) => {
+  try {
+    const data = await identityService.generateRecoveryKey(req.user.id);
+    res.status(200).json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const restoreByRecoveryKey = async (req, res, next) => {
+  try {
+    const data = await identityService.restoreByRecoveryKey(req.body.recoveryKey);
+    const csrfToken = randomUUID();
+
+    res.cookie(env.authCookieName, data.token, buildCookieOptions(true));
+    res.cookie(env.csrfCookieName, csrfToken, buildCookieOptions(false));
+    res.status(200).json({ ...data, csrfToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   initIdentity,
   getMe,
@@ -126,4 +148,6 @@ module.exports = {
   logout,
   refreshCsrf,
   issueSessionToken,
+  createRecoveryKey,
+  restoreByRecoveryKey,
 };
