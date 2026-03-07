@@ -39,10 +39,10 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
+      if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
       if (env.corsOrigins.length === 0) {
-        if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-          return callback(null, true);
-        }
         return callback(new Error('CORS origin denied'));
       }
       if (env.corsOrigins.includes(origin)) return callback(null, true);
