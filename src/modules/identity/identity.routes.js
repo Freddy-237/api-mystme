@@ -25,6 +25,25 @@ router.post(
 	identityController.restoreByRecoveryKey
 );
 
+// POST /identity/email/request-otp — send OTP to email for account linking
+router.post(
+	'/email/request-otp',
+	authMiddleware,
+	body('email').isEmail().withMessage('email invalide'),
+	validate,
+	identityController.requestEmailOtp,
+);
+
+// POST /identity/email/verify-otp — verify OTP and mark email as verified
+router.post(
+	'/email/verify-otp',
+	authMiddleware,
+	body('email').isEmail().withMessage('email invalide'),
+	body('code').isLength({ min: 4, max: 8 }).withMessage('code OTP invalide'),
+	validate,
+	identityController.verifyEmailOtp,
+);
+
 // PATCH /identity/pseudo — regenerate pseudo + avatar
 router.patch('/pseudo', authMiddleware, identityController.updatePseudo);
 

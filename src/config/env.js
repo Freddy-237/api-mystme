@@ -56,4 +56,10 @@ module.exports = {
       ? (process.env.DB_NAME || 'mystme')
       : (requireInProduction('DB_NAME', process.env.DB_NAME) || 'mystme'),
   },
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+  smtpSecure: parseBool(process.env.SMTP_SECURE, false),
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  mailFrom: process.env.MAIL_FROM || '',
 };

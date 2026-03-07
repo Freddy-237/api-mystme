@@ -117,6 +117,28 @@ const issueSessionToken = async (req, res, next) => {
   }
 };
 
+const requestEmailOtp = async (req, res, next) => {
+  try {
+    const data = await identityService.requestEmailOtp(req.user.id, req.body.email);
+    res.status(200).json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const verifyEmailOtp = async (req, res, next) => {
+  try {
+    const data = await identityService.verifyEmailOtp(
+      req.user.id,
+      req.body.email,
+      req.body.code,
+    );
+    res.status(200).json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const createRecoveryKey = async (req, res, next) => {
   try {
     const data = await identityService.generateRecoveryKey(req.user.id);
@@ -150,4 +172,6 @@ module.exports = {
   issueSessionToken,
   createRecoveryKey,
   restoreByRecoveryKey,
+  requestEmailOtp,
+  verifyEmailOtp,
 };
