@@ -6,7 +6,7 @@ const generateAvatar = require('../../utils/generateAvatar');
 const generateToken = require('../../utils/generateToken');
 const AppError = require('../../utils/AppError');
 const env = require('../../config/env');
-const { sendOtpEmail, hasSmtpConfig } = require('../../services/mail.service');
+const { sendOtpEmail, hasEmailConfig } = require('../../services/mail.service');
 
 const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RECOVERY_RAW_LENGTH = 20;
@@ -153,7 +153,7 @@ const requestEmailOtp = async (userId, email) => {
     throw new AppError('Email invalide', 400);
   }
 
-  if (env.isProduction && !hasSmtpConfig()) {
+  if (env.isProduction && !hasEmailConfig()) {
     throw new AppError('Service email indisponible', 503);
   }
 

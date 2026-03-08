@@ -62,4 +62,7 @@ module.exports = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
   mailFrom: process.env.MAIL_FROM || '',
+  brevoApiKey: process.env.BREVO_API_KEY || '',
+  brevoSenderEmail: process.env.BREVO_SENDER_EMAIL || '',
+  brevoSenderName: process.env.BREVO_SENDER_NAME || '',
 };
