@@ -28,8 +28,8 @@ const APPLE_SANDBOX_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
 const verifyAppleReceipt = async (receiptData) => {
   const secret = process.env.APPLE_SHARED_SECRET;
   if (!secret) {
-    logger.warn('[receipt] APPLE_SHARED_SECRET not set — skipping validation');
-    return { valid: true, expiresAt: null, productId: null, environment: 'unknown' };
+    logger.error('[receipt] APPLE_SHARED_SECRET not set — rejecting receipt');
+    return { valid: false, expiresAt: null, productId: null, environment: 'unknown' };
   }
 
   const body = JSON.stringify({
@@ -88,8 +88,8 @@ const verifyGoogleReceipt = async (purchaseToken, productId, isSubscription = tr
   const packageName = process.env.GOOGLE_PACKAGE_NAME || 'com.mystme.app';
 
   if (!credsJson) {
-    logger.warn('[receipt] GOOGLE_SERVICE_ACCOUNT not set — skipping validation');
-    return { valid: true, expiresAt: null, productId };
+    logger.error('[receipt] GOOGLE_SERVICE_ACCOUNT not set — rejecting receipt');
+    return { valid: false, expiresAt: null, productId };
   }
 
   let creds;

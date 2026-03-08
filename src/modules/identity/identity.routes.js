@@ -1,9 +1,35 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const identityController = require('./identity.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
 const validate = require('../../middlewares/validate.middleware');
+
+// ── Rate limiters for sensitive endpoints ────────────────────────────────────
+const recoveryLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { error: 'Trop de tentatives de récupération, réessaye dans une heure' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const otpRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  message: { error: 'Trop de demandes OTP, réessaye dans 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: { error: 'Trop de tentatives de vérification, réessaye dans 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // POST /identity/init — create anonymous user
 router.post('/init', identityController.initIdentity);
@@ -20,6 +46,7 @@ router.post('/recovery-key', authMiddleware, identityController.createRecoveryKe
 // POST /identity/restore — restore an account using a recovery key
 router.post(
 	'/restore',
+	recoveryLimiter,
 	body('recoveryKey').isString().trim().isLength({ min: 12 }).withMessage('recoveryKey invalide'),
 	validate,
 	identityController.restoreByRecoveryKey
@@ -28,6 +55,7 @@ router.post(
 // POST /identity/email/request-otp — send OTP to email for account linking
 router.post(
 	'/email/request-otp',
+	otpRequestLimiter,
 	authMiddleware,
 	body('email').isEmail().withMessage('email invalide'),
 	validate,
@@ -37,6 +65,7 @@ router.post(
 // POST /identity/email/verify-otp — verify OTP and mark email as verified
 router.post(
 	'/email/verify-otp',
+	otpVerifyLimiter,
 	authMiddleware,
 	body('email').isEmail().withMessage('email invalide'),
 	body('code').isLength({ min: 4, max: 8 }).withMessage('code OTP invalide'),

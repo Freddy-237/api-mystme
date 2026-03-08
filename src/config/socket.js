@@ -60,8 +60,8 @@ const initSocket = (httpServer) => {
 
     // ── Presence tracking ──────────────────────────────────────────────────
     onlineUsers.add(uid);
-    // Notify all rooms this user belongs to
-    socket.broadcast.emit('user_online', { userId: uid });
+    // Notify only conversation rooms this user belongs to (not global broadcast)
+    _emitPresenceToConversations(socket, uid, 'user_online');
 
     // Instantiate per-socket guard functions
     const canJoin       = joinGuard(socket);
@@ -207,7 +207,7 @@ const initSocket = (httpServer) => {
       const room = io.sockets.adapter.rooms.get(`user:${uid}`);
       if (!room || room.size === 0) {
         onlineUsers.delete(uid);
-        socket.broadcast.emit('user_offline', { userId: uid });
+        _emitPresenceToConversations(socket, uid, 'user_offline');
       }
       logger.info({ socketId: socket.id, userId: uid }, 'socket disconnected');
     });
@@ -215,6 +215,18 @@ const initSocket = (httpServer) => {
 
   return io;
 };
+
+/**
+ * Emit a presence event only to the socket rooms that represent actual
+ * conversations (UUID-shaped room names), skipping the personal `user:*` room.
+ */
+function _emitPresenceToConversations(socket, userId, event) {
+  for (const room of socket.rooms) {
+    // Skip personal room and the socket's own id room
+    if (room === socket.id || room.startsWith('user:')) continue;
+    socket.to(room).emit(event, { userId });
+  }
+}
 
 const getIO = () => {
   if (!io) throw new Error('Socket.io not initialized');

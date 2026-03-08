@@ -82,6 +82,8 @@ const isConversationUnlocked = async (userId, conversationId) => {
 // ---------------------------------------------------------------------------
 // Internal receipt dispatcher
 // ---------------------------------------------------------------------------
+const VALID_STORES = ['apple', 'google'];
+
 async function _validateReceipt(store, purchaseToken, productId, isSubscription) {
   if (store === 'apple') {
     return verifyAppleReceipt(purchaseToken);
@@ -89,8 +91,8 @@ async function _validateReceipt(store, purchaseToken, productId, isSubscription)
   if (store === 'google') {
     return verifyGoogleReceipt(purchaseToken, productId, isSubscription);
   }
-  logger.warn({ store }, 'Unknown store — skipping receipt validation');
-  return { valid: true, expiresAt: null, productId };
+  logger.warn({ store }, 'Unknown store — rejecting receipt');
+  return { valid: false, expiresAt: null, productId };
 }
 
 module.exports = {
