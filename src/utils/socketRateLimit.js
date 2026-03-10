@@ -16,6 +16,26 @@
 
 const logger = require('./logger');
 
+const createMemoryStore = () => {
+  const buckets = new Map();
+
+  return {
+    async consume({ scope, key, windowMs, max }) {
+      const bucketStartMs = Math.floor(Date.now() / windowMs) * windowMs;
+      const bucketKey = `${scope}:${key}:${bucketStartMs}`;
+      const hits = (buckets.get(bucketKey) || 0) + 1;
+      buckets.set(bucketKey, hits);
+
+      return {
+        allowed: hits <= max,
+        hits,
+        remaining: Math.max(0, max - hits),
+        resetAt: new Date(bucketStartMs + windowMs),
+      };
+    },
+  };
+};
+
 /**
  * Creates a rate-limit guard factory for the given event name.
  *
@@ -27,26 +47,32 @@ const logger = require('./logger');
  *   A factory that, given a socket, returns a guard function.
  *   Calling the guard returns `true` if allowed, `false` if rate-limited.
  */
-function createSocketGuard(eventName, { windowMs = 10_000, max = 10 } = {}) {
+function createSocketGuard(
+  eventName,
+  { windowMs = 10_000, max = 10, keyGenerator } = {},
+  store = createMemoryStore(),
+) {
   return (socket) => {
-    const timestamps = [];
+    return async () => {
+      const uid = socket.user?.userId ?? socket.id;
+      const rawKey = await Promise.resolve(
+        keyGenerator ? keyGenerator(socket) : socket.user?.userId ?? socket.id,
+      );
+      const key = String(rawKey || socket.id);
 
-    return () => {
-      const now = Date.now();
+      const result = await store.consume({
+        scope: `socket:${eventName}`,
+        key,
+        windowMs,
+        max,
+      });
 
-      // Purge timestamps outside the window
-      while (timestamps.length > 0 && timestamps[0] <= now - windowMs) {
-        timestamps.shift();
-      }
-
-      if (timestamps.length >= max) {
-        const uid = socket.user?.userId ?? socket.id;
+      if (!result.allowed) {
         logger.warn({ userId: uid, event: eventName, max, windowMs }, 'socket rate-limit exceeded');
         socket.emit('error', { message: 'Trop de requêtes', event: eventName });
         return false;
       }
 
-      timestamps.push(now);
       return true;
     };
   };

@@ -1,15 +1,55 @@
 const { Server } = require('socket.io');
-const jwt = require('jsonwebtoken');
 const env = require('./env');
 const logger = require('../utils/logger');
 const parseCookies = require('../utils/parseCookies');
 const { extractBearerToken } = require('../utils/authToken');
 const socketRateLimit = require('../utils/socketRateLimit');
+const distributedRateLimitStore = require('../utils/distributedRateLimitStore');
+const conversationRepository = require('../modules/conversation/conversation.repository');
+const { authenticateToken } = require('../modules/identity/identity.auth');
 
 let io;
 
 /** Set of currently connected user IDs (in-memory). */
 const onlineUsers = new Set();
+
+const getConversationId = (payload) => {
+  if (typeof payload === 'string') return payload;
+  if (payload && typeof payload === 'object') return payload.conversationId;
+  return null;
+};
+
+const getPresencePayload = (payload) => {
+  if (typeof payload === 'string') {
+    return { targetUserId: payload, conversationId: null };
+  }
+  if (payload && typeof payload === 'object') {
+    return {
+      targetUserId: payload.targetUserId || null,
+      conversationId: payload.conversationId || null,
+    };
+  }
+  return { targetUserId: null, conversationId: null };
+};
+
+const ensureConversationAccess = async (socket, payload, eventName) => {
+  const conversationId = getConversationId(payload);
+  const userId = socket.user?.userId;
+
+  if (!conversationId) {
+    socket.emit('error', { message: 'conversationId requis', event: eventName });
+    return null;
+  }
+
+  const allowed = await conversationRepository.isParticipant(conversationId, userId);
+  if (!allowed) {
+    logger.warn({ userId, conversationId, event: eventName }, 'socket conversation access denied');
+    socket.emit('error', { message: 'Non autorisé', event: eventName });
+    return null;
+  }
+
+  return conversationId;
+};
 
 const initSocket = (httpServer) => {
   const socketOrigin =
@@ -25,7 +65,7 @@ const initSocket = (httpServer) => {
   });
 
   // JWT auth middleware — reject connections without a valid token
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const authTokenRaw = socket.handshake.auth?.token;
     const authToken = typeof authTokenRaw === 'string' ? authTokenRaw.trim() : null;
     const authHeaderToken = extractBearerToken(socket.handshake.headers?.authorization);
@@ -36,21 +76,22 @@ const initSocket = (httpServer) => {
       return next(new Error('Authentication required'));
     }
     try {
-      socket.user = jwt.verify(token, env.jwtSecret);
+      const user = await authenticateToken(token);
+      socket.user = { userId: user.id };
       next();
     } catch (err) {
-      logger.warn({ socketId: socket.id, err: err.message }, 'socket auth: invalid token');
-      return next(new Error('Invalid token'));
+      logger.warn({ socketId: socket.id, err: err.message }, 'socket auth rejected');
+      return next(new Error(err.statusCode === 403 ? err.message : 'Invalid token'));
     }
   });
 
   // ── Rate-limit guard factories (per-socket sliding window) ──────────────
-  const joinGuard     = socketRateLimit('join_conversation',  { windowMs: 10_000, max: 10 });
-  const leaveGuard    = socketRateLimit('leave_conversation', { windowMs: 10_000, max: 10 });
-  const typingStartG  = socketRateLimit('typing_start',       { windowMs: 2_000,  max: 5  });
-  const typingStopG   = socketRateLimit('typing_stop',        { windowMs: 2_000,  max: 5  });
-  const readGuard     = socketRateLimit('messages_read',      { windowMs: 5_000,  max: 10 });
-  const sendMediaG    = socketRateLimit('send_media',         { windowMs: 30_000, max: 10 });
+  const joinGuard = socketRateLimit('join_conversation', { windowMs: 10_000, max: 10 }, distributedRateLimitStore);
+  const leaveGuard = socketRateLimit('leave_conversation', { windowMs: 10_000, max: 10 }, distributedRateLimitStore);
+  const typingStartG = socketRateLimit('typing_start', { windowMs: 2_000, max: 5 }, distributedRateLimitStore);
+  const typingStopG = socketRateLimit('typing_stop', { windowMs: 2_000, max: 5 }, distributedRateLimitStore);
+  const readGuard = socketRateLimit('messages_read', { windowMs: 5_000, max: 10 }, distributedRateLimitStore);
+  const sendMediaG = socketRateLimit('send_media', { windowMs: 30_000, max: 10 }, distributedRateLimitStore);
 
   io.on('connection', (socket) => {
     const uid = socket.user?.userId ?? socket.id;
@@ -73,19 +114,12 @@ const initSocket = (httpServer) => {
 
     // Join a conversation room — verify user is a participant
     socket.on('join_conversation', async (conversationId) => {
-      if (!canJoin()) return;
+      if (!(await canJoin())) return;
       try {
-        const pool = require('./database');
-        const result = await pool.query(
-          'SELECT id FROM conversations WHERE id = $1 AND (owner_id = $2 OR anonymous_id = $2)',
-          [conversationId, socket.user?.userId]
-        );
-        if (result.rows.length === 0) {
-          socket.emit('error', { message: 'Non autorisé' });
-          return;
-        }
-        socket.join(conversationId);
-        logger.info({ userId: uid, conversationId }, 'socket joined conversation');
+        const authorizedConversationId = await ensureConversationAccess(socket, conversationId, 'join_conversation');
+        if (!authorizedConversationId) return;
+        socket.join(authorizedConversationId);
+        logger.info({ userId: uid, conversationId: authorizedConversationId }, 'socket joined conversation');
       } catch (err) {
         logger.error({ err, userId: uid, conversationId }, 'socket join conversation failed');
         socket.emit('error', { message: 'Erreur serveur' });
@@ -94,31 +128,42 @@ const initSocket = (httpServer) => {
 
     // Leave a conversation room
     socket.on('leave_conversation', (conversationId) => {
-      if (!canLeave()) return;
-      socket.leave(conversationId);
+      void (async () => {
+        if (!(await canLeave())) return;
+        socket.leave(conversationId);
+      })();
     });
 
     // Typing indicators
-    socket.on('typing_start', ({ conversationId }) => {
-      if (!canTypingStart()) return;
+    socket.on('typing_start', async (payload) => {
+      if (!(await canTypingStart())) return;
+      const conversationId = await ensureConversationAccess(socket, payload, 'typing_start');
+      if (!conversationId) return;
+      socket.join(conversationId);
       socket.to(conversationId).emit('typing_start', { userId: uid, conversationId });
     });
 
-    socket.on('typing_stop', ({ conversationId }) => {
-      if (!canTypingStop()) return;
+    socket.on('typing_stop', async (payload) => {
+      if (!(await canTypingStop())) return;
+      const conversationId = await ensureConversationAccess(socket, payload, 'typing_stop');
+      if (!conversationId) return;
+      socket.join(conversationId);
       socket.to(conversationId).emit('typing_stop', { userId: uid, conversationId });
     });
 
     // Mark messages read — broadcast to other participant
-    socket.on('messages_read', ({ conversationId }) => {
-      if (!canRead()) return;
+    socket.on('messages_read', async (payload) => {
+      if (!(await canRead())) return;
+      const conversationId = await ensureConversationAccess(socket, payload, 'messages_read');
+      if (!conversationId) return;
+      socket.join(conversationId);
       socket.to(conversationId).emit('messages_read', { userId: uid, conversationId });
     });
 
     // ── Media upload via socket ──────────────────────────────────────────────
     // Flutter sends raw bytes; we upload to Cloudinary and broadcast new_message.
     socket.on('send_media', async (data, ack) => {
-      if (!canSendMedia()) return;
+      if (!(await canSendMedia())) return;
       const userId = socket.user?.userId;
       const { conversationId, mediaType, filename, bytes, caption } = data || {};
 
@@ -132,13 +177,8 @@ const initSocket = (httpServer) => {
       try {
         logger.info({ userId, conversationId, mediaType, filename }, 'send_media:start');
 
-        // Verify participant
-        const pool = require('./database');
-        const check = await pool.query(
-          'SELECT id FROM conversations WHERE id = $1 AND (owner_id = $2 OR anonymous_id = $2)',
-          [conversationId, userId],
-        );
-        if (check.rows.length === 0) {
+        const authorizedConversationId = await ensureConversationAccess(socket, conversationId, 'send_media');
+        if (!authorizedConversationId) {
           if (typeof ack === 'function') ack({ ok: false, error: 'Non autorisé' });
           return;
         }
@@ -167,10 +207,15 @@ const initSocket = (httpServer) => {
 
         // Persist message
         const messageService = require('../modules/message/message.service');
-        const message = await messageService.createMediaMessage(
+        const { message, activatedConversation } = await messageService.createMediaMessageWithConversationState(
           conversationId, userId, mediaUrl, mediaType, caption || '',
         );
         logger.info({ userId, conversationId, messageId: message?.id }, 'send_media:saved');
+
+        if (activatedConversation) {
+          io.to(`user:${activatedConversation.owner_id}`).emit('new_conversation', activatedConversation);
+          io.to(`user:${activatedConversation.anonymous_id}`).emit('new_conversation', activatedConversation);
+        }
 
         // Broadcast to all room participants
         const msgObj = {
@@ -184,7 +229,8 @@ const initSocket = (httpServer) => {
           created_at:       message.created_at,
           is_read:          false,
         };
-        io.to(conversationId).emit('new_message', msgObj);
+        socket.join(authorizedConversationId);
+        io.to(authorizedConversationId).emit('new_message', msgObj);
 
         if (typeof ack === 'function') ack({ ok: true, message: msgObj });
       } catch (err) {
@@ -195,9 +241,36 @@ const initSocket = (httpServer) => {
     });
 
     // Check if a user is online
-    socket.on('check_presence', (targetUserId) => {
+    socket.on('check_presence', async (payload) => {
+      const userId = socket.user?.userId;
+      const { targetUserId, conversationId } = getPresencePayload(payload);
+
+      if (!targetUserId) {
+        socket.emit('error', { message: 'targetUserId requis', event: 'check_presence' });
+        return;
+      }
+
+      let allowed = targetUserId === userId;
+      if (!allowed && conversationId) {
+        const authorizedConversationId = await ensureConversationAccess(socket, { conversationId }, 'check_presence');
+        if (!authorizedConversationId) return;
+        const conversation = await conversationRepository.findById(authorizedConversationId);
+        allowed = !!conversation && (conversation.owner_id === targetUserId || conversation.anonymous_id === targetUserId);
+      }
+
+      if (!allowed) {
+        allowed = await conversationRepository.hasSharedConversation(userId, targetUserId);
+      }
+
+      if (!allowed) {
+        logger.warn({ userId, targetUserId }, 'socket presence access denied');
+        socket.emit('error', { message: 'Non autorisé', event: 'check_presence' });
+        return;
+      }
+
       socket.emit('presence_result', {
         userId: targetUserId,
+        conversationId: conversationId || null,
         online: onlineUsers.has(targetUserId),
       });
     });

@@ -17,17 +17,12 @@ const resolveRecipientId = async (conversationId, senderId) => {
   return conv.owner_id === senderId ? conv.anonymous_id : conv.owner_id;
 };
 
-/**
- * If this is the first message in the conversation, set started_at and
- * notify both participants via a new_conversation socket event.
- */
-const activateConversationIfNeeded = async (conversationId) => {
+const emitNewConversationIfNeeded = async (conversation) => {
   try {
-    const updated = await conversationRepository.setStartedAt(conversationId);
-    if (updated) {
+    if (conversation) {
       const io = getIO();
-      io.to(`user:${updated.owner_id}`).emit('new_conversation', updated);
-      io.to(`user:${updated.anonymous_id}`).emit('new_conversation', updated);
+      io.to(`user:${conversation.owner_id}`).emit('new_conversation', conversation);
+      io.to(`user:${conversation.anonymous_id}`).emit('new_conversation', conversation);
     }
   } catch (_) {}
 };
@@ -62,15 +57,14 @@ const sendMessage = async (req, res, next) => {
       return res.status(400).json({ message: 'conversationId et content requis' });
     }
 
-    const message = await messageService.sendMessage(
+    const { message, activatedConversation } = await messageService.sendMessageWithConversationState(
       conversationId,
       req.user.id,
       content,
       replyToMessageId
     );
 
-    // Set started_at on first message & notify both participants about the new conv
-    await activateConversationIfNeeded(conversationId);
+    await emitNewConversationIfNeeded(activatedConversation);
 
     // Emit to the conversation room via Socket.io
     try {
@@ -192,14 +186,14 @@ const unhideMessageForMe = async (req, res, next) => {
 // ---------------------------------------------------------------------------
 
 const MEDIA_CONFIG = {
-  video: { uploadFn: uploadToCloudinaryVideo, serviceFn: 'sendVideoMessage', fieldLabel: 'vidéo', preview: '🎥 Vidéo reçue' },
-  image: { uploadFn: uploadToCloudinaryImage, serviceFn: 'sendImageMessage', fieldLabel: 'image', preview: '🖼️ Image reçue' },
-  file:  { uploadFn: uploadToCloudinaryFile,  serviceFn: 'sendFileMessage',  fieldLabel: 'fichier', preview: '📎 Fichier reçu' },
-  audio: { uploadFn: uploadToCloudinaryAudio, serviceFn: 'sendAudioMessage', fieldLabel: 'audio', preview: '🎤 Audio reçu' },
+  video: { uploadFn: uploadToCloudinaryVideo, fieldLabel: 'vidéo', preview: '🎥 Vidéo reçue' },
+  image: { uploadFn: uploadToCloudinaryImage, fieldLabel: 'image', preview: '🖼️ Image reçue' },
+  file:  { uploadFn: uploadToCloudinaryFile, fieldLabel: 'fichier', preview: '📎 Fichier reçu' },
+  audio: { uploadFn: uploadToCloudinaryAudio, fieldLabel: 'audio', preview: '🎤 Audio reçu' },
 };
 
 const createMediaHandler = (mediaType) => {
-  const { uploadFn, serviceFn, fieldLabel, preview } = MEDIA_CONFIG[mediaType];
+  const { uploadFn, fieldLabel, preview } = MEDIA_CONFIG[mediaType];
   return async (req, res, next) => {
     try {
       const { conversationId } = req.body;
@@ -232,7 +226,13 @@ const createMediaHandler = (mediaType) => {
         logger.error({ err: uploadErr, mediaType, conversationId }, 'Cloudinary upload failed');
         return res.status(502).json({ message: `Upload ${fieldLabel} échoué`, detail: uploadErr.message });
       }
-      const message = await messageService[serviceFn](conversationId, req.user.id, mediaUrl);
+      const { message, activatedConversation } = await messageService.createMediaMessageWithConversationState(
+        conversationId,
+        req.user.id,
+        mediaUrl,
+        mediaType,
+        MEDIA_CONFIG[mediaType].preview,
+      );
       logger.info(
         {
           mediaType,
@@ -244,7 +244,7 @@ const createMediaHandler = (mediaType) => {
         'messageController.createMediaHandler:message-created',
       );
 
-      await activateConversationIfNeeded(conversationId);
+      await emitNewConversationIfNeeded(activatedConversation);
       logger.info(
         { mediaType, conversationId, userId: req.user.id },
         'messageController.createMediaHandler:conversation-activated',

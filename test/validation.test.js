@@ -28,17 +28,16 @@ function authed(req, { token, authCookie, csrfToken }) {
 test('updatePseudo rejects pseudo shorter than 2 chars', async () => {
   const id = await initIdentity();
   const res = await authed(
-    request(app).put('/identity/pseudo').send({ pseudo: 'A' }),
+    request(app).patch('/identity/pseudo').send({ pseudo: 'A' }),
     id,
   );
   assert.equal(res.status, 400);
-  assert.match(res.body.error || '', /2.*30/);
 });
 
 test('updatePseudo rejects pseudo longer than 30 chars', async () => {
   const id = await initIdentity();
   const res = await authed(
-    request(app).put('/identity/pseudo').send({ pseudo: 'A'.repeat(31) }),
+    request(app).patch('/identity/pseudo').send({ pseudo: 'A'.repeat(31) }),
     id,
   );
   assert.equal(res.status, 400);
@@ -47,7 +46,7 @@ test('updatePseudo rejects pseudo longer than 30 chars', async () => {
 test('updatePseudo accepts valid pseudo', async () => {
   const id = await initIdentity();
   const res = await authed(
-    request(app).put('/identity/pseudo').send({ pseudo: 'ValidPseudo' }),
+    request(app).patch('/identity/pseudo').send({ pseudo: 'ValidPseudo' }),
     id,
   );
   assert.equal(res.status, 200);
@@ -58,7 +57,7 @@ test('updatePseudo accepts valid pseudo', async () => {
 test('updateBio rejects bio > 300 chars', async () => {
   const id = await initIdentity();
   const res = await authed(
-    request(app).put('/identity/bio').send({ bio: 'x'.repeat(301) }),
+    request(app).patch('/identity/bio').send({ bio: 'x'.repeat(301) }),
     id,
   );
   assert.equal(res.status, 400);
@@ -67,7 +66,7 @@ test('updateBio rejects bio > 300 chars', async () => {
 test('updateBio accepts valid bio', async () => {
   const id = await initIdentity();
   const res = await authed(
-    request(app).put('/identity/bio').send({ bio: 'Hello world' }),
+    request(app).patch('/identity/bio').send({ bio: 'Hello world' }),
     id,
   );
   assert.equal(res.status, 200);

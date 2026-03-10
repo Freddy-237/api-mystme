@@ -1,9 +1,40 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const messageRepository = require('./message.repository');
 const conversationRepository = require('../conversation/conversation.repository');
+const {
+  isConversationExpired,
+} = require('../conversation/conversation.expiry');
 const subscriptionService = require('../subscription/subscription.service');
 const AppError = require('../../utils/AppError');
 const logger = require('../../utils/logger');
+
+const persistMessageWithConversationState = async ({
+  conversationId,
+  senderId,
+  content,
+  replyToMessageId,
+  mediaUrl,
+  mediaType,
+}) => {
+  await assertConversationWritable(conversationId, senderId);
+
+  if (replyToMessageId) {
+    const target = await messageRepository.findById(replyToMessageId);
+    if (!target || target.conversation_id !== conversationId || target.is_deleted) {
+      throw new AppError('Message de réponse invalide', 400);
+    }
+  }
+
+  return messageRepository.createMessageWithConversationState({
+    id: uuidv4(),
+    conversation_id: conversationId,
+    sender_id: senderId,
+    content,
+    media_url: mediaUrl,
+    media_type: mediaType,
+    reply_to_message_id: replyToMessageId,
+  });
+};
 
 const assertConversationParticipant = async (conversationId, userId) => {
   logger.info({ conversationId, userId }, 'assertConversationParticipant:start');
@@ -42,9 +73,7 @@ const assertConversationWritable = async (conversationId, senderId) => {
   }
 
   if (conv.started_at != null) {
-    const expiresAt = new Date(conv.started_at);
-    expiresAt.setDate(expiresAt.getDate() + 7);
-    if (new Date() > expiresAt) {
+    if (isConversationExpired(conv.started_at)) {
       // Premium users or single-unlock buyers can bypass expiry.
       const unlocked = await subscriptionService.isConversationUnlocked(senderId, conversationId);
       logger.info(
@@ -66,47 +95,74 @@ const createMediaMessage = async (conversationId, senderId, mediaUrl, mediaType,
     { conversationId, senderId, mediaType, mediaUrl, content },
     'createMediaMessage:start',
   );
-  await assertConversationWritable(conversationId, senderId);
-  const message = await messageRepository.createMessage({
-    id: uuidv4(),
-    conversation_id: conversationId,
-    sender_id: senderId,
+  const result = await persistMessageWithConversationState({
+    conversationId,
+    senderId,
     content,
-    media_url: mediaUrl,
-    media_type: mediaType,
+    mediaUrl,
+    mediaType,
   });
   logger.info(
     {
       conversationId,
       senderId,
       mediaType,
-      messageId: message?.id,
-      createdAt: message?.created_at,
+      messageId: result.message?.id,
+      createdAt: result.message?.created_at,
     },
     'createMediaMessage:success',
   );
-  return message;
+  return result.message;
+};
+
+const createMediaMessageWithConversationState = async (
+  conversationId,
+  senderId,
+  mediaUrl,
+  mediaType,
+  content,
+) => {
+  logger.info(
+    { conversationId, senderId, mediaType, mediaUrl, content },
+    'createMediaMessageWithConversationState:start',
+  );
+  const result = await persistMessageWithConversationState({
+    conversationId,
+    senderId,
+    content,
+    mediaUrl,
+    mediaType,
+  });
+  logger.info(
+    {
+      conversationId,
+      senderId,
+      mediaType,
+      messageId: result.message?.id,
+      activatedConversation: !!result.activatedConversation,
+    },
+    'createMediaMessageWithConversationState:success',
+  );
+  return result;
 };
 
 const sendMessage = async (conversationId, senderId, content, replyToMessageId) => {
-  await assertConversationWritable(conversationId, senderId);
-
-  if (replyToMessageId) {
-    const target = await messageRepository.findById(replyToMessageId);
-    if (!target || target.conversation_id !== conversationId || target.is_deleted) {
-      throw new AppError('Message de réponse invalide', 400);
-    }
-  }
-
-  const message = await messageRepository.createMessage({
-    id: uuidv4(),
-    conversation_id: conversationId,
-    sender_id: senderId,
+  const result = await persistMessageWithConversationState({
+    conversationId,
+    senderId,
     content,
-    reply_to_message_id: replyToMessageId,
+    replyToMessageId,
   });
+  return result.message;
+};
 
-  return message;
+const sendMessageWithConversationState = async (conversationId, senderId, content, replyToMessageId) => {
+  return persistMessageWithConversationState({
+    conversationId,
+    senderId,
+    content,
+    replyToMessageId,
+  });
 };
 
 const getMessages = async (conversationId, userId, limit, offset) => {
@@ -180,6 +236,8 @@ module.exports = {
   sendFileMessage,
   sendAudioMessage,
   createMediaMessage,
+  createMediaMessageWithConversationState,
+  sendMessageWithConversationState,
   searchMessages,
   getMedia,
 };

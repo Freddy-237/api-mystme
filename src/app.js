@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 const Sentry = require('./config/sentry');
 const env = require('./config/env');
@@ -19,6 +18,7 @@ const subscriptionRoutes = require('./modules/subscription/subscription.routes')
 // Import middlewares
 const errorMiddleware = require('./middlewares/error.middleware');
 const csrfMiddleware = require('./middlewares/csrf.middleware');
+const createRateLimit = require('./middlewares/rateLimit.middleware');
 
 const app = express();
 
@@ -66,9 +66,11 @@ app.use((req, res, next) => {
 });
 
 // --- Rate limiting (express-rate-limit) ---
-app.use('/identity/init', rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false }));
-app.use('/message',       rateLimit({ windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false }));
-app.use('/conversation',  rateLimit({ windowMs: 60_000, max: 40, standardHeaders: true, legacyHeaders: false }));
+if (process.env.NODE_ENV !== 'test') {
+  app.use('/identity/init', createRateLimit('http:identity:init', { windowMs: 60_000, maxRequests: 10 }));
+  app.use('/message', createRateLimit('http:message', { windowMs: 60_000, maxRequests: 30 }));
+  app.use('/conversation', createRateLimit('http:conversation', { windowMs: 60_000, maxRequests: 40 }));
+}
 
 // --- Health check ---
 app.get('/health', async (_req, res) => {

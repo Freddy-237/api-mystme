@@ -4,7 +4,9 @@ const logger = require('../utils/logger');
 
 const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   const user = await identityRepository.findById(userId);
-  if (!user || !user.push_token) return false;
+  if (!user || !user.push_token || user.notifications_enabled === false) {
+    return false;
+  }
 
   const messaging = getMessaging();
   if (!messaging) return false;
@@ -14,6 +16,19 @@ const sendPushToUser = async ({ userId, title, body, data = {} }) => {
       token: user.push_token,
       notification: { title, body },
       data,
+      android: {
+        notification: {
+          channelId: 'mystme_messages',
+          sound: 'default',
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: 'default',
+          },
+        },
+      },
     });
     return true;
   } catch (error) {

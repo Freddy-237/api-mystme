@@ -4,7 +4,7 @@ const parseCookies = require('../utils/parseCookies');
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 // Paths exempt from CSRF (registration-like endpoints where there is no
 // authenticated session to protect)
-const CSRF_EXEMPT_PATHS = new Set(['/identity/init', '/identity/logout']);
+const CSRF_EXEMPT_PATHS = new Set(['/identity/init']);
 
 const csrfMiddleware = (req, res, next) => {
   if (SAFE_METHODS.has(req.method)) return next();

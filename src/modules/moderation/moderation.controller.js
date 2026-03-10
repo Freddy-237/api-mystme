@@ -28,6 +28,45 @@ const reportMessage = async (req, res, next) => {
   }
 };
 
+const listReports = async (req, res, next) => {
+  try {
+    const reports = await moderationService.listReports({
+      status: req.query.status,
+      limit: req.query.limit,
+    });
+    res.json(reports);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reviewReport = async (req, res, next) => {
+  try {
+    const { decision, note, blockConversation = false, hideMessage = false, banUser = false, banReason } = req.body;
+    const actor = req.moderatorActor || 'system';
+
+    if (note && (typeof note !== 'string' || note.trim().length > 1000)) {
+      return res.status(400).json({ message: 'Note de review invalide (max 1000 caractères)' });
+    }
+
+    const report = await moderationService.reviewReport(req.params.id, {
+      actor,
+      decision,
+      note: note?.trim(),
+      blockConversation: !!blockConversation,
+      hideMessage: !!hideMessage,
+      banUser: !!banUser,
+      banReason: typeof banReason === 'string' ? banReason.trim() : undefined,
+    });
+
+    res.json(report);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   reportMessage,
+  listReports,
+  reviewReport,
 };

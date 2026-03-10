@@ -1,9 +1,9 @@
-const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const parseCookies = require('../utils/parseCookies');
 const { extractBearerToken } = require('../utils/authToken');
+const { authenticateToken } = require('../modules/identity/identity.auth');
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   let token = extractBearerToken(req.headers.authorization);
 
   if (!token) {
@@ -16,11 +16,11 @@ const authMiddleware = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, env.jwtSecret);
-    req.user = { id: decoded.userId };
+    const user = await authenticateToken(token);
+    req.user = { id: user.id };
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Token expiré ou invalide' });
+    return res.status(error.statusCode || 401).json({ message: error.message || 'Token expiré ou invalide' });
   }
 };
 

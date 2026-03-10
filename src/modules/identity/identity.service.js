@@ -7,6 +7,7 @@ const generateToken = require('../../utils/generateToken');
 const AppError = require('../../utils/AppError');
 const env = require('../../config/env');
 const { sendOtpEmail, hasEmailConfig } = require('../../services/mail.service');
+const { requireActiveUserById, assertUserIsActive } = require('./identity.auth');
 
 const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RECOVERY_RAW_LENGTH = 20;
@@ -94,6 +95,20 @@ const updateBio = async (userId, bio) => {
   return updated;
 };
 
+const updateNotificationPreference = async (userId, enabled) => {
+  const user = await identityRepository.findById(userId);
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
+  if (typeof enabled !== 'boolean') {
+    throw new AppError('Préférence de notification invalide', 400);
+  }
+
+  const updated = await identityRepository.updateNotificationPreference(
+    userId,
+    enabled,
+  );
+  return updated;
+};
+
 const updatePushToken = async (userId, token) => {
   const user = await identityRepository.findById(userId);
   if (!user) throw new AppError('Utilisateur introuvable', 404);
@@ -108,8 +123,7 @@ const updatePushToken = async (userId, token) => {
 };
 
 const issueSessionToken = async (userId) => {
-  const user = await identityRepository.findById(userId);
-  if (!user) throw new AppError('Utilisateur introuvable', 404);
+  const user = await requireActiveUserById(userId);
 
   const token = generateToken(user.id);
   return { token };
@@ -138,6 +152,7 @@ const restoreByRecoveryKey = async (recoveryKey) => {
   const keyHash = hashRecoveryKey(normalized);
   const user = await identityRepository.findByRecoveryKeyHash(keyHash);
   if (!user) throw new AppError('Clé de récupération invalide', 401);
+  assertUserIsActive(user);
 
   await identityRepository.updateLastSeen(user.id);
   const token = generateToken(user.id);
@@ -307,6 +322,7 @@ const verifyEmailRestore = async (email, code) => {
 
   const user = await identityRepository.findByEmail(normalizedEmail);
   if (!user) throw new AppError('Utilisateur introuvable', 404);
+  assertUserIsActive(user);
 
   await identityRepository.updateLastSeen(user.id);
   const token = generateToken(user.id);
@@ -318,6 +334,7 @@ module.exports = {
   getMe,
   updatePseudo,
   updateBio,
+  updateNotificationPreference,
   updatePushToken,
   issueSessionToken,
   generateRecoveryKey,

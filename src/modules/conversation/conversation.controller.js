@@ -43,10 +43,7 @@ const resolveLink = async (req, res, next) => {
     // Notify the link owner about the new conversation (same as startConversation)
     try {
       const io = getIO();
-      io.to(`user:${result.ownerId}`).emit('new_conversation', {
-        id: result.conversationId,
-        owner_id: result.ownerId,
-      });
+      io.to(`user:${result.ownerId}`).emit('new_conversation', result.conversation);
     } catch (_) {
       // Socket not initialized — skip
     }

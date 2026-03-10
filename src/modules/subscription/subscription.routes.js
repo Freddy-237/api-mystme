@@ -1,15 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const rateLimit = require('express-rate-limit');
 const controller = require('./subscription.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
+const createRateLimit = require('../../middlewares/rateLimit.middleware');
 
-const purchaseLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 10,
-  message: { error: 'Trop de vérifications, réessaye dans une minute' },
-  standardHeaders: true,
-  legacyHeaders: false,
+const purchaseLimiter = createRateLimit('http:subscription:verify', {
+  windowMs: 60 * 1000,
+  maxRequests: 10,
+  message: 'Trop de vérifications, réessaye dans une minute',
 });
 
 // All subscription routes require authentication

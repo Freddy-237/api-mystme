@@ -13,9 +13,15 @@ const baseConfig = env.databaseUrl
       database: env.db.name,
     };
 
+const sslConfig = env.dbSsl
+  ? {
+      rejectUnauthorized: env.dbSslRejectUnauthorized,
+    }
+  : false;
+
 const pool = new Pool({
   ...baseConfig,
-  ssl: env.dbSsl ? { rejectUnauthorized: false } : false,
+  ssl: sslConfig,
   max: 20,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,

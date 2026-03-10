@@ -11,13 +11,13 @@ const generateCode = () => {
 
 const createLink = async (ownerId) => {
   const code = generateCode();
-  logger.info({ ownerId, code }, '[link.service] createLink');
+  logger.info({ ownerId }, '[link.service] createLink');
   const link = await linkRepository.createLink({
     id: uuidv4(),
     code,
     owner_id: ownerId,
   });
-  logger.info({ ownerId, linkId: link.id, code: link.code }, '[link.service] createLink OK');
+  logger.info({ ownerId, linkId: link.id }, '[link.service] createLink OK');
   return {
     ...link,
     shareUrl: `/c/${link.code}`,
@@ -25,13 +25,13 @@ const createLink = async (ownerId) => {
 };
 
 const getLinkByCode = async (code) => {
-  logger.info({ code }, '[link.service] getLinkByCode');
+  logger.info('[link.service] getLinkByCode');
   const link = await linkRepository.findByCode(code);
   if (!link) {
-    logger.warn({ code }, '[link.service] getLinkByCode — not found');
+    logger.warn('[link.service] getLinkByCode — not found');
     throw new AppError('Lien introuvable ou inactif', 404);
   }
-  logger.info({ code, linkId: link.id, ownerId: link.owner_id, isActive: link.is_active }, '[link.service] getLinkByCode OK');
+  logger.info({ linkId: link.id, ownerId: link.owner_id, isActive: link.is_active }, '[link.service] getLinkByCode OK');
   return link;
 };
 

@@ -107,7 +107,7 @@ const sendOtpEmail = async ({ to, code, pseudo }) => {
   const transporter = getTransporter();
 
   if (!transporter) {
-    logger.warn({ to, subject, code }, 'SMTP non configure: OTP email not sent (debug log only)');
+    logger.warn({ to, subject }, 'SMTP non configure: OTP email not sent');
     return { sent: false, debug: true };
   }
 

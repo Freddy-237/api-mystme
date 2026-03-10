@@ -1,38 +1,48 @@
-/**
- * Simple in-memory rate limiter.
- * Replace with redis-based solution in production.
- */
-const rateLimit = (windowMs = 60000, maxRequests = 60) => {
-  const requests = new Map();
+const distributedRateLimitStore = require('../utils/distributedRateLimitStore');
+const logger = require('../utils/logger');
 
-  // Prune stale IPs every 5 minutes to prevent memory leak.
-  setInterval(() => {
-    const now = Date.now();
-    for (const [ip, timestamps] of requests) {
-      const valid = timestamps.filter(t => now - t < windowMs);
-      if (valid.length === 0) requests.delete(ip);
-      else requests.set(ip, valid);
+const getDefaultKey = (req) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+};
+
+const createRateLimit = (
+  scope,
+  {
+    windowMs = 60_000,
+    maxRequests = 60,
+    keyGenerator = getDefaultKey,
+    message = 'Trop de requêtes, réessaye plus tard',
+  } = {},
+) => {
+  return async (req, res, next) => {
+    try {
+      const rawKey = await Promise.resolve(keyGenerator(req));
+      const key = String(rawKey || 'unknown');
+      const result = await distributedRateLimitStore.consume({
+        scope,
+        key,
+        windowMs,
+        max: maxRequests,
+      });
+
+      res.setHeader('RateLimit-Limit', String(maxRequests));
+      res.setHeader('RateLimit-Remaining', String(result.remaining));
+      res.setHeader('RateLimit-Reset', String(Math.ceil(result.resetAt.getTime() / 1000)));
+
+      if (!result.allowed) {
+        return res.status(429).json({ message });
+      }
+
+      next();
+    } catch (error) {
+      logger.error({ err: error, scope, path: req.path }, 'http rate-limit failed open');
+      next();
     }
-  }, 5 * 60 * 1000).unref();
-
-  return (req, res, next) => {
-    const ip = req.ip || req.connection.remoteAddress;
-    const now = Date.now();
-
-    if (!requests.has(ip)) {
-      requests.set(ip, []);
-    }
-
-    const timestamps = requests.get(ip).filter(t => now - t < windowMs);
-    timestamps.push(now);
-    requests.set(ip, timestamps);
-
-    if (timestamps.length > maxRequests) {
-      return res.status(429).json({ message: 'Trop de requêtes, réessaye plus tard' });
-    }
-
-    next();
   };
 };
 
-module.exports = rateLimit;
+module.exports = createRateLimit;

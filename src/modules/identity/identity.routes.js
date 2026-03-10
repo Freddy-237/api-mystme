@@ -79,6 +79,17 @@ router.patch('/pseudo', authMiddleware, identityController.updatePseudo);
 // PATCH /identity/bio — update bio text
 router.patch('/bio', authMiddleware, identityController.updateBio);
 
+// PATCH /identity/notifications — update notification preference
+router.patch(
+	'/notifications',
+	authMiddleware,
+	body('enabled')
+		.custom((value) => typeof value === 'boolean')
+		.withMessage('enabled invalide'),
+	validate,
+	identityController.updateNotificationPreference,
+);
+
 // PATCH /identity/push-token — register/update FCM device token
 router.patch(
 	'/push-token',

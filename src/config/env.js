@@ -40,6 +40,10 @@ module.exports = {
   csrfCookieName: process.env.CSRF_COOKIE_NAME || 'mystme_csrf',
   csrfHeaderName: process.env.CSRF_HEADER_NAME || 'x-csrf-token',
   dbSsl: parseBool(process.env.DB_SSL, process.env.NODE_ENV === 'production'),
+  dbSslRejectUnauthorized: parseBool(
+    process.env.DB_SSL_REJECT_UNAUTHORIZED,
+    process.env.NODE_ENV === 'production',
+  ),
   databaseUrl: process.env.DATABASE_URL || undefined,
   // When DATABASE_URL is provided (e.g. Railway), individual DB_* vars are not
   // required — the connection string already contains host, user, db name, etc.
@@ -65,4 +69,6 @@ module.exports = {
   brevoApiKey: process.env.BREVO_API_KEY || '',
   brevoSenderEmail: process.env.BREVO_SENDER_EMAIL || '',
   brevoSenderName: process.env.BREVO_SENDER_NAME || '',
+  moderationApiKey: process.env.MODERATION_API_KEY
+    || (process.env.NODE_ENV === 'production' ? '' : 'dev-moderation-key'),
 };

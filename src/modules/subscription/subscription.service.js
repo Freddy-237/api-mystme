@@ -3,6 +3,7 @@ const repo = require('./subscription.repository');
 const { verifyAppleReceipt, verifyGoogleReceipt } = require('../../services/receipt.service');
 const logger = require('../../utils/logger');
 const AppError = require('../../utils/AppError');
+const conversationRepository = require('../conversation/conversation.repository');
 
 /**
  * Product IDs (must match App Store Connect & Google Play Console).
@@ -22,7 +23,7 @@ const verifySubscription = async ({ userId, productId, store, purchaseToken, exp
     throw new AppError('Reçu invalide', 400);
   }
 
-  const sub = await repo.createSubscription({
+  const { subscription, conflict } = await repo.upsertSubscriptionWithUserTier({
     id: uuidv4(),
     user_id: userId,
     product_id: receipt.productId || productId,
@@ -31,25 +32,31 @@ const verifySubscription = async ({ userId, productId, store, purchaseToken, exp
     status: 'active',
     started_at: new Date(),
     expires_at: receipt.expiresAt || (expiresAt ? new Date(expiresAt) : null),
-  });
+  }, 'monthly');
+  if (conflict) {
+    throw new AppError('Ce reçu est déjà associé à un autre compte', 409);
+  }
 
-  // Mark user as premium.
-  await repo.updateUserTier(userId, 'monthly');
   logger.info({ userId, productId, store }, 'Subscription verified');
 
-  return sub;
+  return subscription;
 };
 
 /**
  * Verify a single-conversation unlock purchase.
  */
 const verifyUnlock = async ({ userId, conversationId, productId, store, purchaseToken }) => {
+  const allowed = await conversationRepository.isParticipant(conversationId, userId);
+  if (!allowed) {
+    throw new AppError('Non autorisé', 403);
+  }
+
   const receipt = await _validateReceipt(store, purchaseToken, productId || PRODUCTS.UNLOCK_SINGLE, /* isSub */ false);
   if (!receipt.valid) {
     throw new AppError('Reçu invalide', 400);
   }
 
-  const unlock = await repo.createUnlock({
+  const { unlock, conflict } = await repo.upsertUnlock({
     id: uuidv4(),
     user_id: userId,
     conversation_id: conversationId,
@@ -57,6 +64,9 @@ const verifyUnlock = async ({ userId, conversationId, productId, store, purchase
     store,
     purchase_token: purchaseToken,
   });
+  if (conflict) {
+    throw new AppError('Ce reçu est déjà utilisé pour une autre conversation', 409);
+  }
 
   logger.info({ userId, conversationId, store }, 'Conversation unlock verified');
   return unlock;

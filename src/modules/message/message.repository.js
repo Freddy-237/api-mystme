@@ -1,4 +1,6 @@
 const pool = require('../../config/database');
+const conversationRepository = require('../conversation/conversation.repository');
+const withTransaction = require('../../utils/withTransaction');
 
 const baseSelect = `
   SELECT
@@ -9,7 +11,9 @@ const baseSelect = `
   LEFT JOIN messages rm ON rm.id = m.reply_to_message_id
 `;
 
-const createMessage = async (msg) => {
+const execute = (queryable, query, values) => queryable.query(query, values);
+
+const createMessage = async (msg, queryable = pool) => {
   const query = `
     INSERT INTO messages (id, conversation_id, sender_id, content, media_url, media_type, reply_to_message_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -24,8 +28,8 @@ const createMessage = async (msg) => {
     msg.media_type ?? null,
     msg.reply_to_message_id ?? null,
   ];
-  await pool.query(query, values);
-  return findById(msg.id);
+  await execute(queryable, query, values);
+  return findById(msg.id, queryable);
 };
 
 const findByConversation = async (
@@ -49,20 +53,33 @@ const findByConversation = async (
   return result.rows;
 };
 
-const findById = async (messageId) => {
-  const result = await pool.query(
+const findById = async (messageId, queryable = pool) => {
+  const result = await execute(
+    queryable,
     `${baseSelect} WHERE m.id = $1`,
     [messageId]
   );
   return result.rows[0];
 };
 
-const softDelete = async (messageId) => {
-  await pool.query(
+const createMessageWithConversationState = async (msg) => {
+  return withTransaction(async (client) => {
+    const message = await createMessage(msg, client);
+    const activatedConversation = await conversationRepository.setStartedAt(msg.conversation_id, client);
+    return {
+      message,
+      activatedConversation: activatedConversation || null,
+    };
+  });
+};
+
+const softDelete = async (messageId, queryable = pool) => {
+  await execute(
+    queryable,
     'UPDATE messages SET is_deleted = TRUE WHERE id = $1',
     [messageId]
   );
-  return findById(messageId);
+  return findById(messageId, queryable);
 };
 
 /** Mark all messages in a conversation as read for a specific recipient. */
@@ -151,6 +168,7 @@ const findMediaByConversation = async (
 
 module.exports = {
   createMessage,
+  createMessageWithConversationState,
   findByConversation,
   findById,
   softDelete,

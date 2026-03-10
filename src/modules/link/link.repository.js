@@ -2,7 +2,7 @@ const pool = require('../../config/database');
 const logger = require('../../utils/logger');
 
 const createLink = async (link) => {
-  logger.info({ linkId: link.id, code: link.code, ownerId: link.owner_id }, '[link.repo] createLink INSERT');
+  logger.info({ linkId: link.id, ownerId: link.owner_id }, '[link.repo] createLink INSERT');
   const query = `
     INSERT INTO links (id, code, owner_id)
     VALUES ($1, $2, $3)
@@ -15,9 +15,9 @@ const createLink = async (link) => {
 };
 
 const findByCode = async (code) => {
-  logger.info({ code }, '[link.repo] findByCode');
+  logger.info('[link.repo] findByCode');
   const result = await pool.query('SELECT * FROM links WHERE code = $1 AND is_active = TRUE', [code]);
-  logger.info({ code, found: !!result.rows[0] }, '[link.repo] findByCode result');
+  logger.info({ found: !!result.rows[0] }, '[link.repo] findByCode result');
   return result.rows[0];
 };
 

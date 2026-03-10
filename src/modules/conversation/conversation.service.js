@@ -19,30 +19,19 @@ const startConversation = async (inviteCode, anonymousUserId) => {
     throw new AppError('Vous ne pouvez pas démarrer une conversation avec vous-même', 400);
   }
 
-  // Check if conversation already exists for this link + anonymous user
-  const existing = await conversationRepository.findByLinkAndAnonymous(link.id, anonymousUserId);
-  if (existing) {
-    // If either participant had archived/deleted this thread, re-open it.
-    await conversationRepository.reactivateForUsers(existing.id, [
-      link.owner_id,
-      anonymousUserId,
-    ]);
-    return existing;
-  }
-
-  // Create new conversation
-  const conversation = await conversationRepository.createConversation({
+  const { conversation, created } = await conversationRepository.findOrCreateByLinkAndAnonymous({
     id: uuidv4(),
     owner_id: link.owner_id,
     anonymous_id: anonymousUserId,
     link_id: link.id,
   });
 
-  // Initialize trust level for the new conversation
-  try {
-    await trustService.initTrust(conversation.id);
-  } catch (_) {
-    // Non-blocking — trust can be initialized later
+  if (created) {
+    try {
+      await trustService.initTrust(conversation.id);
+    } catch (_) {
+      // Non-blocking — trust can be initialized later
+    }
   }
 
   return conversation;
@@ -55,14 +44,12 @@ const startConversation = async (inviteCode, anonymousUserId) => {
 const resolveLink = async (inviteCode, anonymousUserId) => {
   const conversation = await startConversation(inviteCode, anonymousUserId);
 
-  const owner = await identityRepository.findById(conversation.owner_id);
-  const anonymous = await identityRepository.findById(anonymousUserId);
-
   return {
+    conversation,
     conversationId: conversation.id,
     ownerId: conversation.owner_id,
-    targetPseudo: owner?.pseudo || 'Anonyme',
-    anonymousPseudo: anonymous?.pseudo || 'Ghost_92',
+    targetPseudo: conversation.owner_pseudo || 'Anonyme',
+    anonymousPseudo: conversation.anonymous_pseudo || 'Ghost_92',
   };
 };
 

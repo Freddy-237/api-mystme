@@ -70,6 +70,18 @@ const updateBio = async (req, res, next) => {
   }
 };
 
+const updateNotificationPreference = async (req, res, next) => {
+  try {
+    const user = await identityService.updateNotificationPreference(
+      req.user.id,
+      req.body.enabled,
+    );
+    res.status(200).json(user);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updatePushToken = async (req, res, next) => {
   try {
     const user = await identityService.updatePushToken(req.user.id, req.body.token);
@@ -188,6 +200,7 @@ module.exports = {
   getMe,
   updatePseudo,
   updateBio,
+  updateNotificationPreference,
   updatePushToken,
   logout,
   refreshCsrf,

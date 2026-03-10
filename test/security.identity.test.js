@@ -81,6 +81,32 @@ test('bearer token auth still works on protected endpoint', async () => {
     .expect(200);
 
   assert.equal(typeof meRes.body?.id, 'string');
+  assert.equal(meRes.body?.notifications_enabled, true);
+});
+
+test('notification preference is persisted on the user profile', async () => {
+  const initRes = await request(app)
+    .post('/identity/init')
+    .expect(201);
+
+  const token = initRes.body?.token;
+  assert.equal(typeof token, 'string');
+
+  const updateRes = await request(app)
+    .patch('/identity/notifications')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ enabled: false })
+    .expect(200);
+
+  assert.equal(updateRes.body?.notifications_enabled, false);
+  assert.equal(updateRes.body?.push_token ?? null, null);
+
+  const meRes = await request(app)
+    .get('/identity/me')
+    .set('Authorization', `Bearer ${token}`)
+    .expect(200);
+
+  assert.equal(meRes.body?.notifications_enabled, false);
 });
 
 test('session-token returns a bearer token for authenticated cookie session', async () => {

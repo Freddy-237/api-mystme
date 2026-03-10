@@ -5,7 +5,7 @@ const createLink = async (req, res, next) => {
   try {
     logger.info({ userId: req.user.id }, '[link.controller] createLink called');
     const link = await linkService.createLink(req.user.id);
-    logger.info({ userId: req.user.id, linkId: link.id, code: link.code }, '[link.controller] createLink OK');
+    logger.info({ userId: req.user.id, linkId: link.id }, '[link.controller] createLink OK');
     res.status(201).json(link);
   } catch (error) {
     logger.error({ err: error, userId: req.user?.id }, '[link.controller] createLink FAILED');
@@ -15,12 +15,12 @@ const createLink = async (req, res, next) => {
 
 const getLinkByCode = async (req, res, next) => {
   try {
-    logger.info({ code: req.params.code }, '[link.controller] getLinkByCode called');
+    logger.info('[link.controller] getLinkByCode called');
     const link = await linkService.getLinkByCode(req.params.code);
-    logger.info({ code: req.params.code, linkId: link.id }, '[link.controller] getLinkByCode OK');
+    logger.info({ linkId: link.id }, '[link.controller] getLinkByCode OK');
     res.json(link);
   } catch (error) {
-    logger.error({ err: error, code: req.params.code }, '[link.controller] getLinkByCode FAILED');
+    logger.error({ err: error }, '[link.controller] getLinkByCode FAILED');
     next(error);
   }
 };

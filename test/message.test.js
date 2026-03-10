@@ -154,7 +154,7 @@ test('get conversations lists the user conversations', async () => {
   await createConversation(owner, anon);
 
   const res = await request(app)
-    .get('/conversation')
+    .get('/conversation/mine')
     .set('Authorization', `Bearer ${owner.token}`)
     .expect(200);
 
@@ -162,22 +162,25 @@ test('get conversations lists the user conversations', async () => {
   assert.ok(res.body.length >= 1);
 });
 
-test('archive and unarchive a conversation', async () => {
+test('archive a conversation hides it from /conversation/mine', async () => {
   const owner = await initIdentity();
   const anon = await initIdentity();
   const conversationId = await createConversation(owner, anon);
 
   // Archive
   const archRes = await authed(
-    request(app).patch(`/conversation/${conversationId}/archive`),
+    request(app).post(`/conversation/${conversationId}/archive`),
     owner,
   );
   assert.equal(archRes.status, 200);
 
-  // Unarchive
-  const unarchRes = await authed(
-    request(app).patch(`/conversation/${conversationId}/unarchive`),
-    owner,
+  const mineRes = await request(app)
+    .get('/conversation/mine')
+    .set('Authorization', `Bearer ${owner.token}`)
+    .expect(200);
+
+  const archivedStillVisible = (mineRes.body || []).some(
+    (c) => c.id === conversationId,
   );
-  assert.equal(unarchRes.status, 200);
+  assert.equal(archivedStillVisible, false);
 });
