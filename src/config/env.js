@@ -42,7 +42,7 @@ module.exports = {
   dbSsl: parseBool(process.env.DB_SSL, process.env.NODE_ENV === 'production'),
   dbSslRejectUnauthorized: parseBool(
     process.env.DB_SSL_REJECT_UNAUTHORIZED,
-    process.env.NODE_ENV === 'production',
+    false,
   ),
   databaseUrl: process.env.DATABASE_URL || undefined,
   // When DATABASE_URL is provided (e.g. Railway), individual DB_* vars are not
