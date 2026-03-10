@@ -88,6 +88,25 @@ router.patch(
 	identityController.updatePushToken
 );
 
+// POST /identity/email/restore/request-otp — (unauthenticated) send OTP for email-based restore
+router.post(
+	'/email/restore/request-otp',
+	otpRequestLimiter,
+	body('email').isEmail().withMessage('email invalide'),
+	validate,
+	identityController.requestEmailRestore,
+);
+
+// POST /identity/email/restore/verify-otp — (unauthenticated) verify OTP and restore account
+router.post(
+	'/email/restore/verify-otp',
+	recoveryLimiter,
+	body('email').isEmail().withMessage('email invalide'),
+	body('code').isLength({ min: 4, max: 8 }).withMessage('code OTP invalide'),
+	validate,
+	identityController.verifyEmailRestore,
+);
+
 // GET /identity/csrf — refresh CSRF token cookie for current session
 router.get('/csrf', authMiddleware, identityController.refreshCsrf);
 

@@ -128,6 +128,22 @@ const findByEmail = async (email) => {
   return result.rows[0];
 };
 
+/**
+ * Lookup the latest OTP for a given email, regardless of userId.
+ * Used for unauthenticated email-based account restore.
+ */
+const findLatestEmailOtpByEmail = async (email) => {
+  const result = await pool.query(
+    `SELECT id, user_id, email, code_hash, expires_at, consumed_at, created_at
+       FROM identity_email_otps
+      WHERE LOWER(email) = LOWER($1)
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [email]
+  );
+  return result.rows[0];
+};
+
 module.exports = {
   createUser,
   findById,
@@ -143,4 +159,5 @@ module.exports = {
   consumeEmailOtp,
   setVerifiedEmail,
   findByEmail,
+  findLatestEmailOtpByEmail,
 };

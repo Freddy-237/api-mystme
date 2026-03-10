@@ -229,6 +229,90 @@ const verifyEmailOtp = async (userId, email, code) => {
   };
 };
 
+/**
+ * Request OTP for unauthenticated email-based restore.
+ * Only works if the email is already verified on an existing account.
+ */
+const requestEmailRestore = async (email) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    throw new AppError('Email invalide', 400);
+  }
+
+  if (env.isProduction && !hasEmailConfig()) {
+    throw new AppError('Service email indisponible', 503);
+  }
+
+  const user = await identityRepository.findByEmail(normalizedEmail);
+  if (!user || !user.email_verified_at) {
+    // Don't reveal whether the email exists — generic message
+    throw new AppError('Aucun compte vérifié avec cet email', 404);
+  }
+
+  const code = generateOtpCode();
+  const codeHash = hashRecoveryKey(`${normalizedEmail}:${code}`);
+  const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+
+  await identityRepository.createEmailOtp({
+    id: uuidv4(),
+    userId: user.id,
+    email: normalizedEmail,
+    codeHash,
+    expiresAt,
+  });
+
+  const mailResult = await sendOtpEmail({
+    to: normalizedEmail,
+    code,
+    pseudo: user.pseudo,
+  });
+
+  const payload = {
+    ok: true,
+    email: normalizedEmail,
+    expiresAt: expiresAt.toISOString(),
+    delivery: mailResult.sent ? 'sent' : 'debug',
+  };
+
+  if (!env.isProduction && !mailResult.sent) {
+    payload.debugOtp = code;
+  }
+
+  return payload;
+};
+
+/**
+ * Verify OTP and restore account session (unauthenticated).
+ */
+const verifyEmailRestore = async (email, code) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) {
+    throw new AppError('Email invalide', 400);
+  }
+
+  const latestOtp = await identityRepository.findLatestEmailOtpByEmail(normalizedEmail);
+  if (!latestOtp) throw new AppError('Code OTP introuvable', 404);
+  if (latestOtp.consumed_at) throw new AppError('Code OTP déjà utilisé', 409);
+  if (new Date(latestOtp.expires_at).getTime() < Date.now()) {
+    throw new AppError('Code OTP expiré', 410);
+  }
+
+  const cleanCode = String(code || '').trim();
+  const expectedHash = hashRecoveryKey(`${normalizedEmail}:${cleanCode}`);
+  if (expectedHash !== latestOtp.code_hash) {
+    throw new AppError('Code OTP invalide', 401);
+  }
+
+  await identityRepository.consumeEmailOtp(latestOtp.id);
+
+  const user = await identityRepository.findByEmail(normalizedEmail);
+  if (!user) throw new AppError('Utilisateur introuvable', 404);
+
+  await identityRepository.updateLastSeen(user.id);
+  const token = generateToken(user.id);
+  return { user, token };
+};
+
 module.exports = {
   initIdentity,
   getMe,
@@ -240,4 +324,6 @@ module.exports = {
   restoreByRecoveryKey,
   requestEmailOtp,
   verifyEmailOtp,
+  requestEmailRestore,
+  verifyEmailRestore,
 };

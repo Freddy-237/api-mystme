@@ -161,6 +161,28 @@ const restoreByRecoveryKey = async (req, res, next) => {
   }
 };
 
+const requestEmailRestore = async (req, res, next) => {
+  try {
+    const data = await identityService.requestEmailRestore(req.body.email);
+    res.status(200).json(data);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const verifyEmailRestore = async (req, res, next) => {
+  try {
+    const data = await identityService.verifyEmailRestore(req.body.email, req.body.code);
+    const csrfToken = randomUUID();
+
+    res.cookie(env.authCookieName, data.token, buildCookieOptions(true));
+    res.cookie(env.csrfCookieName, csrfToken, buildCookieOptions(false));
+    res.status(200).json({ ...data, csrfToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   initIdentity,
   getMe,
@@ -174,4 +196,6 @@ module.exports = {
   restoreByRecoveryKey,
   requestEmailOtp,
   verifyEmailOtp,
+  requestEmailRestore,
+  verifyEmailRestore,
 };
