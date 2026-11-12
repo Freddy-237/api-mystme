@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { randomUUID } = require('crypto');
 const Sentry = require('./config/sentry');
+const AppError = require('./utils/AppError');
 const env = require('./config/env');
 const pool = require('./config/database');
 
@@ -22,6 +23,7 @@ const createRateLimit = require('./middlewares/rateLimit.middleware');
 
 const app = express();
 
+app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 // --- Security headers ---
@@ -34,6 +36,14 @@ app.use(
   }),
 );
 
+// --- Request tracing ---
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || randomUUID();
+  req.requestId = requestId;
+  res.setHeader('x-request-id', requestId);
+  next();
+});
+
 // --- Global middlewares ---
 app.use(
   cors({
@@ -43,10 +53,10 @@ app.use(
         return callback(null, true);
       }
       if (env.corsOrigins.length === 0) {
-        return callback(new Error('CORS origin denied'));
+        return callback(new AppError('CORS origin denied', 403));
       }
       if (env.corsOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error('CORS origin denied'));
+      return callback(new AppError('CORS origin denied', 403));
     },
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -58,13 +68,6 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 app.use(csrfMiddleware);
 
-app.use((req, res, next) => {
-  const requestId = req.headers['x-request-id'] || randomUUID();
-  req.requestId = requestId;
-  res.setHeader('x-request-id', requestId);
-  next();
-});
-
 // --- Rate limiting (express-rate-limit) ---
 if (process.env.NODE_ENV !== 'test') {
   app.use('/identity/init', createRateLimit('http:identity:init', { windowMs: 60_000, maxRequests: 10 }));
@@ -74,14 +77,38 @@ if (process.env.NODE_ENV !== 'test') {
 
 // --- Health check ---
 app.get('/health', async (_req, res) => {
-  const cloudinaryOk = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+  const report = {
+    status: 'ok',
+    db: 'unknown',
+    cloudinary: env.cloudinaryConfigured ? 'configured' : 'MISSING',
+    email: {
+      provider: env.emailProvider,
+      smtp: env.hasSmtpConfig() ? 'configured' : 'MISSING',
+      brevo: env.hasBrevoApiConfig() ? 'configured' : 'MISSING',
+    },
+    timestamp: new Date().toISOString(),
+  };
+
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'ok', db: 'up', cloudinary: cloudinaryOk ? 'configured' : 'MISSING', timestamp: new Date().toISOString() });
-  } catch {
-    res.status(503).json({ status: 'degraded', db: 'down', cloudinary: cloudinaryOk ? 'configured' : 'MISSING', timestamp: new Date().toISOString() });
+    report.db = 'up';
+  } catch (error) {
+    report.status = 'degraded';
+    report.db = 'down';
+    report.error = 'Database unreachable';
+    return res.status(503).json(report);
   }
+
+  if (!env.cloudinaryConfigured) {
+    report.cloudinary = 'disabled';
+    return res.json(report);
+  }
+
+  return res.json(report);
 });
+
+// --- Root route for health check ---
+app.get('/', (_req, res) => res.send('OK'));
 
 // --- API routes ---
 app.use('/identity', identityRoutes);

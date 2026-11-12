@@ -6,7 +6,7 @@ const api_key = process.env.CLOUDINARY_API_KEY;
 const api_secret = process.env.CLOUDINARY_API_SECRET;
 
 if (!cloud_name || !api_key || !api_secret) {
-  logger.warn('⚠️  Cloudinary credentials not fully set — media uploads will fail');
+  logger.warn('Cloudinary credentials not fully set - media uploads will fail');
 }
 
 cloudinary.config({ cloud_name, api_key, api_secret, secure: true });

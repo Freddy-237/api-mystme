@@ -30,6 +30,7 @@ const initFirebaseAdmin = () => {
       return true;
     }
 
+    logger.warn('Firebase Admin credentials are not configured; push notifications will be disabled');
     return false;
   } catch (error) {
     logger.error({ err: error }, 'firebase admin init failed');
@@ -37,9 +38,13 @@ const initFirebaseAdmin = () => {
   }
 };
 
+const isFirebaseAdminConfigured = () => {
+  return !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON || !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+};
+
 const getMessaging = () => {
   if (!initFirebaseAdmin()) return null;
   return admin.messaging();
 };
 
-module.exports = { getMessaging };
+module.exports = { getMessaging, isFirebaseAdminConfigured };

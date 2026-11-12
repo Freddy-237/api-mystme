@@ -17,13 +17,38 @@ const reportMessage = async (conversationId, messageId, reportedBy, reason) => {
     }
   }
 
-  return moderationRepository.createReport({
+  const existing = await moderationRepository.findExistingReport({
+    conversationId,
+    messageId: messageId || null,
+    reportedBy,
+  });
+  if (existing) {
+    return {
+      ...existing,
+      already_reported: true,
+    };
+  }
+
+  const created = await moderationRepository.createReport({
     id: uuidv4(),
     conversation_id: conversationId,
     message_id: messageId || null,
     reported_by: reportedBy,
     reason: reason?.trim() || 'Contenu inapproprié',
   });
+
+  const report = created
+    ? await moderationRepository.findById(created.id)
+    : await moderationRepository.findExistingReport({
+        conversationId,
+        messageId: messageId || null,
+        reportedBy,
+      });
+
+  return {
+    ...report,
+    already_reported: !created,
+  };
 };
 
 const getReports = async (conversationId) => {

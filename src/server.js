@@ -12,17 +12,27 @@ const server = http.createServer(app);
 // Init Socket.io
 initSocket(server);
 
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled promise rejection, shutting down');
+  process.exit(1);
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error({ err: error }, 'Uncaught exception, shutting down');
+  process.exit(1);
+});
+
 // Run migrations → test DB → start
 runMigration({ closePool: false })
   .then(() => pool.query('SELECT NOW()'))
   .then(() => {
-    logger.info('✅ Connected to PostgreSQL');
+    logger.info('Connected to PostgreSQL');
     server.listen(env.port, () => {
-      logger.info(`🚀 Server running on port ${env.port}`);
+      logger.info(`Server running on port ${env.port}`);
     });
   })
   .catch((err) => {
-    logger.error('❌ Failed to start server', err.message);
+    logger.error({ err }, 'Failed to start server');
     process.exit(1);
   });
 

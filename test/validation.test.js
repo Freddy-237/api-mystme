@@ -52,6 +52,24 @@ test('updatePseudo accepts valid pseudo', async () => {
   assert.equal(res.status, 200);
 });
 
+test('updatePseudo regenerates identity when pseudo is omitted', async () => {
+  const id = await initIdentity();
+  const previousPseudo = id.user.pseudo;
+  const previousAvatar = id.user.avatar_url;
+
+  const res = await authed(
+    request(app).patch('/identity/pseudo').send({}),
+    id,
+  );
+
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.pseudo, 'string');
+  assert.ok(res.body.pseudo.length >= 2);
+  assert.equal(typeof res.body.avatar_url, 'string');
+  assert.notEqual(res.body.pseudo, previousPseudo);
+  assert.notEqual(res.body.avatar_url, previousAvatar);
+});
+
 // ── Bio validation ──
 
 test('updateBio rejects bio > 300 chars', async () => {
@@ -77,9 +95,30 @@ test('updateBio accepts valid bio', async () => {
 test('trust endpoint without auth returns 401', async () => {
   const res = await request(app).get('/trust/nonexistent');
   assert.equal(res.status, 401);
+  assert.equal(res.body?.error, true);
+  assert.equal(res.body?.message, 'Authentification requise');
 });
 
 test('moderation report without auth returns 401', async () => {
   const res = await request(app).post('/moderation/report').send({ conversationId: '123', reason: 'spam' });
   assert.equal(res.status, 401);
+  assert.equal(res.body?.error, true);
+  assert.equal(res.body?.message, 'Authentification requise');
+});
+
+test('link mine without auth returns 401', async () => {
+  const res = await request(app).get('/link/mine');
+  assert.equal(res.status, 401);
+  assert.equal(res.body?.error, true);
+  assert.equal(res.body?.message, 'Authentification requise');
+});
+
+test('conversation get with invalid UUID returns 400', async () => {
+  const user = await request(app).post('/identity/init').expect(201);
+  const token = user.body.token;
+  const res = await request(app)
+    .get('/conversation/invalid-uuid')
+    .set('Authorization', `Bearer ${token}`);
+  assert.equal(res.status, 400);
+  assert.equal(res.body?.error, true);
 });

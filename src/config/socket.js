@@ -7,11 +7,91 @@ const socketRateLimit = require('../utils/socketRateLimit');
 const distributedRateLimitStore = require('../utils/distributedRateLimitStore');
 const conversationRepository = require('../modules/conversation/conversation.repository');
 const { authenticateToken } = require('../modules/identity/identity.auth');
+const AppError = require('../utils/AppError');
 
 let io;
 
+const SOCKET_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+const ALLOWED_SOCKET_MEDIA_TYPES = new Set(['image', 'audio', 'video', 'file']);
+
+const toSocketErrorPayload = ({
+  message,
+  event,
+  code = 'SOCKET_ERROR',
+  requestId = null,
+}) => ({
+  error: true,
+  code,
+  message,
+  event: event || null,
+  requestId,
+});
+
+const emitSocketError = (socket, {
+  message,
+  event,
+  code,
+}) => {
+  socket.emit('error', toSocketErrorPayload({
+    message,
+    event,
+    code,
+    requestId: socket.id,
+  }));
+};
+
+const rejectSocketAck = (ack, {
+  message,
+  event,
+  code,
+}) => {
+  if (typeof ack !== 'function') return;
+  ack({
+    ok: false,
+    error: message,
+    ...toSocketErrorPayload({
+      message,
+      event,
+      code,
+    }),
+  });
+};
+
 /** Set of currently connected user IDs (in-memory). */
 const onlineUsers = new Set();
+
+const getPresenceAudienceUserIds = (conversations, userId) => {
+  const audience = new Set();
+
+  for (const conversation of conversations || []) {
+    const peerId = conversation.owner_id === userId
+      ? conversation.anonymous_id
+      : conversation.owner_id;
+    if (peerId && peerId !== userId) {
+      audience.add(peerId);
+    }
+  }
+
+  return [...audience];
+};
+
+const emitPresenceToPeers = async (
+  emitter,
+  userId,
+  event,
+  repository = conversationRepository,
+) => {
+  try {
+    const conversations = await repository.findByParticipantWithUnread(userId);
+    const audienceUserIds = getPresenceAudienceUserIds(conversations, userId);
+
+    for (const peerId of audienceUserIds) {
+      emitter.to(`user:${peerId}`).emit(event, { userId });
+    }
+  } catch (error) {
+    logger.warn({ err: error, userId, event }, 'socket presence emit failed');
+  }
+};
 
 const getConversationId = (payload) => {
   if (typeof payload === 'string') return payload;
@@ -37,21 +117,89 @@ const ensureConversationAccess = async (socket, payload, eventName) => {
   const userId = socket.user?.userId;
 
   if (!conversationId) {
-    socket.emit('error', { message: 'conversationId requis', event: eventName });
+    emitSocketError(socket, {
+      message: 'conversationId requis',
+      event: eventName,
+      code: 'BAD_REQUEST',
+    });
     return null;
   }
 
   const allowed = await conversationRepository.isParticipant(conversationId, userId);
   if (!allowed) {
     logger.warn({ userId, conversationId, event: eventName }, 'socket conversation access denied');
-    socket.emit('error', { message: 'Non autorisé', event: eventName });
+    emitSocketError(socket, {
+      message: 'Non autorisé',
+      event: eventName,
+      code: 'FORBIDDEN',
+    });
     return null;
   }
 
   return conversationId;
 };
 
+const normalizeSocketMediaPayload = (data) => {
+  const payload = data && typeof data === 'object' ? data : {};
+  const conversationId = typeof payload.conversationId === 'string'
+    ? payload.conversationId.trim()
+    : '';
+  const mediaType = typeof payload.mediaType === 'string'
+    ? payload.mediaType.trim().toLowerCase()
+    : '';
+  const filename = typeof payload.filename === 'string'
+    ? payload.filename.trim()
+    : '';
+  const caption = typeof payload.caption === 'string'
+    ? payload.caption.trim()
+    : '';
+  const rawBytes = payload.bytes;
+
+  if (!conversationId || !mediaType || rawBytes == null) {
+    throw new AppError('Payload invalide (conversationId, mediaType, bytes requis)', 400);
+  }
+
+  if (!ALLOWED_SOCKET_MEDIA_TYPES.has(mediaType)) {
+    throw new AppError('Type de media invalide', 400);
+  }
+
+  let buffer;
+  if (Buffer.isBuffer(rawBytes)) {
+    buffer = rawBytes;
+  } else if (Array.isArray(rawBytes)) {
+    buffer = Buffer.from(rawBytes);
+  } else if (rawBytes && typeof rawBytes === 'object') {
+    buffer = Buffer.from(Object.values(rawBytes));
+  } else {
+    throw new AppError('Payload bytes invalide', 400);
+  }
+
+  if (!buffer.length) {
+    throw new AppError('Fichier vide', 400);
+  }
+
+  if (buffer.length > SOCKET_MEDIA_MAX_BYTES) {
+    throw new AppError('Fichier trop volumineux (max 25 Mo)', 413);
+  }
+
+  if (caption.length > 5000) {
+    throw new AppError('Caption trop longue (max 5000 caractères)', 400);
+  }
+
+  return {
+    conversationId,
+    mediaType,
+    filename,
+    caption,
+    buffer,
+  };
+};
+
 const initSocket = (httpServer) => {
+  if (process.env.NODE_ENV === 'production' && env.corsOrigins.length === 0) {
+    throw new Error('CORS_ORIGINS required in production for Socket.IO');
+  }
+
   const socketOrigin =
     env.corsOrigins.length > 0 ? env.corsOrigins : ['http://localhost:3000'];
 
@@ -59,6 +207,7 @@ const initSocket = (httpServer) => {
     cors: {
       origin: socketOrigin,
       methods: ['GET', 'POST'],
+      credentials: true,
     },
     // Allow binary payloads up to 30 MB (images + audio via send_media).
     maxHttpBufferSize: 30 * 1024 * 1024,
@@ -73,7 +222,7 @@ const initSocket = (httpServer) => {
     const token = authToken || authHeaderToken || cookieToken;
     if (!token) {
       logger.warn({ socketId: socket.id }, 'socket auth: no token');
-      return next(new Error('Authentication required'));
+      return next(new Error('Authentification requise'));
     }
     try {
       const user = await authenticateToken(token);
@@ -81,7 +230,7 @@ const initSocket = (httpServer) => {
       next();
     } catch (err) {
       logger.warn({ socketId: socket.id, err: err.message }, 'socket auth rejected');
-      return next(new Error(err.statusCode === 403 ? err.message : 'Invalid token'));
+      return next(new Error(err.statusCode === 403 ? err.message : 'Session expirée ou invalide'));
     }
   });
 
@@ -101,8 +250,7 @@ const initSocket = (httpServer) => {
 
     // ── Presence tracking ──────────────────────────────────────────────────
     onlineUsers.add(uid);
-    // Notify only conversation rooms this user belongs to (not global broadcast)
-    _emitPresenceToConversations(socket, uid, 'user_online');
+    void emitPresenceToPeers(io, uid, 'user_online');
 
     // Instantiate per-socket guard functions
     const canJoin       = joinGuard(socket);
@@ -122,7 +270,11 @@ const initSocket = (httpServer) => {
         logger.info({ userId: uid, conversationId: authorizedConversationId }, 'socket joined conversation');
       } catch (err) {
         logger.error({ err, userId: uid, conversationId }, 'socket join conversation failed');
-        socket.emit('error', { message: 'Erreur serveur' });
+        emitSocketError(socket, {
+          message: 'Le service est temporairement indisponible. Réessaie plus tard.',
+          event: 'join_conversation',
+          code: 'SERVER_ERROR',
+        });
       }
     });
 
@@ -165,52 +317,65 @@ const initSocket = (httpServer) => {
     socket.on('send_media', async (data, ack) => {
       if (!(await canSendMedia())) return;
       const userId = socket.user?.userId;
-      const { conversationId, mediaType, filename, bytes, caption } = data || {};
+      let payload;
 
-      if (!conversationId || !mediaType || !bytes) {
-        const errMsg = 'Payload invalide (conversationId, mediaType, bytes requis)';
-        logger.warn({ userId, conversationId, mediaType }, `send_media: ${errMsg}`);
-        if (typeof ack === 'function') ack({ ok: false, error: errMsg });
+      try {
+        payload = normalizeSocketMediaPayload(data);
+      } catch (error) {
+        logger.warn({ err: error, userId }, 'send_media:invalid-payload');
+        rejectSocketAck(ack, {
+          message: error.message,
+          event: 'send_media',
+          code: 'BAD_REQUEST',
+        });
         return;
       }
+
+      const {
+        conversationId,
+        mediaType,
+        filename,
+        caption,
+        buffer,
+      } = payload;
 
       try {
         logger.info({ userId, conversationId, mediaType, filename }, 'send_media:start');
 
         const authorizedConversationId = await ensureConversationAccess(socket, conversationId, 'send_media');
         if (!authorizedConversationId) {
-          if (typeof ack === 'function') ack({ ok: false, error: 'Non autorisé' });
+          rejectSocketAck(ack, {
+            message: 'Non autorisé',
+            event: 'send_media',
+            code: 'FORBIDDEN',
+          });
           return;
         }
 
-        // Convert received payload to Buffer
-        let buffer;
-        if (Buffer.isBuffer(bytes)) {
-          buffer = bytes;
-        } else if (Array.isArray(bytes)) {
-          buffer = Buffer.from(bytes);
-        } else {
-          buffer = Buffer.from(Object.values(bytes));
-        }
-        logger.info({ userId, conversationId, mediaType, bufferBytes: buffer.length }, 'send_media:buffer');
+        const messageService = require('../modules/message/message.service');
+        await messageService.assertConversationWritable(authorizedConversationId, userId);
+
+        logger.info(
+          { userId, conversationId: authorizedConversationId, mediaType, bufferBytes: buffer.length },
+          'send_media:buffer',
+        );
 
         // Upload to Cloudinary
         const uploadService = require('../services/upload.service');
         let mediaUrl;
         switch (mediaType) {
-          case 'image': mediaUrl = await uploadService.uploadImage(buffer, conversationId); break;
-          case 'audio': mediaUrl = await uploadService.uploadAudio(buffer, conversationId); break;
-          case 'video': mediaUrl = await uploadService.uploadVideo(buffer, conversationId); break;
-          default:      mediaUrl = await uploadService.uploadFile(buffer, conversationId);  break;
+          case 'image': mediaUrl = await uploadService.uploadImage(buffer, authorizedConversationId); break;
+          case 'audio': mediaUrl = await uploadService.uploadAudio(buffer, authorizedConversationId); break;
+          case 'video': mediaUrl = await uploadService.uploadVideo(buffer, authorizedConversationId); break;
+          default:      mediaUrl = await uploadService.uploadFile(buffer, authorizedConversationId);  break;
         }
-        logger.info({ userId, conversationId, mediaType, mediaUrl }, 'send_media:uploaded');
+        logger.info({ userId, conversationId: authorizedConversationId, mediaType, mediaUrl }, 'send_media:uploaded');
 
         // Persist message
-        const messageService = require('../modules/message/message.service');
         const { message, activatedConversation } = await messageService.createMediaMessageWithConversationState(
-          conversationId, userId, mediaUrl, mediaType, caption || '',
+          authorizedConversationId, userId, mediaUrl, mediaType, caption,
         );
-        logger.info({ userId, conversationId, messageId: message?.id }, 'send_media:saved');
+        logger.info({ userId, conversationId: authorizedConversationId, messageId: message?.id }, 'send_media:saved');
 
         if (activatedConversation) {
           io.to(`user:${activatedConversation.owner_id}`).emit('new_conversation', activatedConversation);
@@ -235,8 +400,24 @@ const initSocket = (httpServer) => {
         if (typeof ack === 'function') ack({ ok: true, message: msgObj });
       } catch (err) {
         logger.error({ err, userId, conversationId, mediaType }, 'send_media:error');
-        if (typeof ack === 'function') ack({ ok: false, error: err.message });
-        else socket.emit('media_error', { error: err.message, conversationId });
+        const message = err?.statusCode >= 500
+          ? 'Le service est temporairement indisponible. Réessaie plus tard.'
+          : (err.message || 'Envoi du média impossible');
+        if (typeof ack === 'function') {
+          rejectSocketAck(ack, {
+            message,
+            event: 'send_media',
+            code: err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED',
+          });
+        } else {
+          socket.emit('media_error', {
+            error: true,
+            code: err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED',
+            message,
+            conversationId,
+            requestId: socket.id,
+          });
+        }
       }
     });
 
@@ -246,7 +427,11 @@ const initSocket = (httpServer) => {
       const { targetUserId, conversationId } = getPresencePayload(payload);
 
       if (!targetUserId) {
-        socket.emit('error', { message: 'targetUserId requis', event: 'check_presence' });
+        emitSocketError(socket, {
+          message: 'targetUserId requis',
+          event: 'check_presence',
+          code: 'BAD_REQUEST',
+        });
         return;
       }
 
@@ -264,7 +449,11 @@ const initSocket = (httpServer) => {
 
       if (!allowed) {
         logger.warn({ userId, targetUserId }, 'socket presence access denied');
-        socket.emit('error', { message: 'Non autorisé', event: 'check_presence' });
+        emitSocketError(socket, {
+          message: 'Non autorisé',
+          event: 'check_presence',
+          code: 'FORBIDDEN',
+        });
         return;
       }
 
@@ -280,7 +469,7 @@ const initSocket = (httpServer) => {
       const room = io.sockets.adapter.rooms.get(`user:${uid}`);
       if (!room || room.size === 0) {
         onlineUsers.delete(uid);
-        _emitPresenceToConversations(socket, uid, 'user_offline');
+        void emitPresenceToPeers(io, uid, 'user_offline');
       }
       logger.info({ socketId: socket.id, userId: uid }, 'socket disconnected');
     });
@@ -289,21 +478,19 @@ const initSocket = (httpServer) => {
   return io;
 };
 
-/**
- * Emit a presence event only to the socket rooms that represent actual
- * conversations (UUID-shaped room names), skipping the personal `user:*` room.
- */
-function _emitPresenceToConversations(socket, userId, event) {
-  for (const room of socket.rooms) {
-    // Skip personal room and the socket's own id room
-    if (room === socket.id || room.startsWith('user:')) continue;
-    socket.to(room).emit(event, { userId });
-  }
-}
-
 const getIO = () => {
   if (!io) throw new Error('Socket.io not initialized');
   return io;
 };
 
-module.exports = { initSocket, getIO, onlineUsers };
+module.exports = {
+  initSocket,
+  getIO,
+  onlineUsers,
+  __private: {
+    emitPresenceToPeers,
+    getPresenceAudienceUserIds,
+    normalizeSocketMediaPayload,
+    toSocketErrorPayload,
+  },
+};

@@ -31,7 +31,7 @@ const findActiveByUser = async (userId, queryable = pool) => {
   const { rows } = await execute(
     queryable,
     `SELECT * FROM subscriptions
-     WHERE user_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW())
+     WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
      ORDER BY created_at DESC LIMIT 1`,
     [userId],
   );

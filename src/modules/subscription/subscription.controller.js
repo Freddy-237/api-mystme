@@ -2,11 +2,11 @@ const subscriptionService = require('./subscription.service');
 
 /**
  * POST /subscription/verify
- * Body: { productId, store, purchaseToken, expiresAt? }
+ * Body: { productId, store, purchaseToken }
  */
 const verifySubscription = async (req, res, next) => {
   try {
-    const { productId, store, purchaseToken, expiresAt } = req.body;
+    const { productId, store, purchaseToken } = req.body;
     if (!productId || !store || !purchaseToken) {
       return res.status(400).json({ message: 'productId, store et purchaseToken requis' });
     }
@@ -19,7 +19,6 @@ const verifySubscription = async (req, res, next) => {
       productId,
       store,
       purchaseToken,
-      expiresAt,
     });
     res.status(201).json(sub);
   } catch (error) {

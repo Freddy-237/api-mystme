@@ -16,22 +16,26 @@ const PRODUCTS = {
 /**
  * Verify a subscription purchase with Apple/Google, then persist it.
  */
-const verifySubscription = async ({ userId, productId, store, purchaseToken, expiresAt }) => {
+const verifySubscription = async ({ userId, productId, store, purchaseToken }) => {
+  if (productId !== PRODUCTS.PREMIUM_MONTHLY) {
+    throw new AppError('Produit abonnement invalide', 400);
+  }
+
   // Server-to-server receipt validation.
   const receipt = await _validateReceipt(store, purchaseToken, productId, /* isSub */ true);
-  if (!receipt.valid) {
+  if (!_isReceiptValidForProduct(receipt, productId, true)) {
     throw new AppError('Reçu invalide', 400);
   }
 
   const { subscription, conflict } = await repo.upsertSubscriptionWithUserTier({
     id: uuidv4(),
     user_id: userId,
-    product_id: receipt.productId || productId,
+    product_id: productId,
     store,
     purchase_token: purchaseToken,
     status: 'active',
     started_at: new Date(),
-    expires_at: receipt.expiresAt || (expiresAt ? new Date(expiresAt) : null),
+    expires_at: new Date(receipt.expiresAt),
   }, 'monthly');
   if (conflict) {
     throw new AppError('Ce reçu est déjà associé à un autre compte', 409);
@@ -46,13 +50,18 @@ const verifySubscription = async ({ userId, productId, store, purchaseToken, exp
  * Verify a single-conversation unlock purchase.
  */
 const verifyUnlock = async ({ userId, conversationId, productId, store, purchaseToken }) => {
+  const expectedProductId = productId || PRODUCTS.UNLOCK_SINGLE;
+  if (expectedProductId !== PRODUCTS.UNLOCK_SINGLE) {
+    throw new AppError('Produit de déblocage invalide', 400);
+  }
+
   const allowed = await conversationRepository.isParticipant(conversationId, userId);
   if (!allowed) {
     throw new AppError('Non autorisé', 403);
   }
 
-  const receipt = await _validateReceipt(store, purchaseToken, productId || PRODUCTS.UNLOCK_SINGLE, /* isSub */ false);
-  if (!receipt.valid) {
+  const receipt = await _validateReceipt(store, purchaseToken, expectedProductId, /* isSub */ false);
+  if (!_isReceiptValidForProduct(receipt, expectedProductId, false)) {
     throw new AppError('Reçu invalide', 400);
   }
 
@@ -60,7 +69,7 @@ const verifyUnlock = async ({ userId, conversationId, productId, store, purchase
     id: uuidv4(),
     user_id: userId,
     conversation_id: conversationId,
-    product_id: productId || PRODUCTS.UNLOCK_SINGLE,
+    product_id: expectedProductId,
     store,
     purchase_token: purchaseToken,
   });
@@ -96,13 +105,21 @@ const VALID_STORES = ['apple', 'google'];
 
 async function _validateReceipt(store, purchaseToken, productId, isSubscription) {
   if (store === 'apple') {
-    return verifyAppleReceipt(purchaseToken);
+    return verifyAppleReceipt(purchaseToken, productId, isSubscription);
   }
   if (store === 'google') {
     return verifyGoogleReceipt(purchaseToken, productId, isSubscription);
   }
   logger.warn({ store }, 'Unknown store — rejecting receipt');
   return { valid: false, expiresAt: null, productId };
+}
+
+function _isReceiptValidForProduct(receipt, productId, isSubscription) {
+  if (!receipt?.valid || receipt.productId !== productId) return false;
+  if (!isSubscription) return true;
+
+  const expiresAt = new Date(receipt.expiresAt).getTime();
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 module.exports = {

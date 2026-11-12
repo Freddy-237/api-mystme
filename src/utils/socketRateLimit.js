@@ -11,7 +11,7 @@
  *   });
  *
  * When the limit is exceeded the socket receives an `error` event with
- * `{ message: 'Trop de requêtes', event }` and the guard returns false.
+ * a normalized payload and the guard returns false.
  */
 
 const logger = require('./logger');
@@ -69,7 +69,13 @@ function createSocketGuard(
 
       if (!result.allowed) {
         logger.warn({ userId: uid, event: eventName, max, windowMs }, 'socket rate-limit exceeded');
-        socket.emit('error', { message: 'Trop de requêtes', event: eventName });
+        socket.emit('error', {
+          error: true,
+          code: 'RATE_LIMITED',
+          message: 'Trop de requêtes. Réessaie plus tard.',
+          event: eventName,
+          requestId: socket.id,
+        });
         return false;
       }
 

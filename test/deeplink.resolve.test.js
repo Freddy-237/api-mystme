@@ -77,3 +77,23 @@ test('resolve-link stays idempotent under concurrent requests', async () => {
   const ids = new Set(responses.map((response) => response.body?.conversationId));
   assert.equal(ids.size, 1, 'all concurrent resolve-link requests should reuse the same conversation');
 });
+
+test('conversation resolve-link without auth returns 401', async () => {
+  await request(app)
+    .post('/conversation/resolve-link')
+    .send({ inviteCode: 'fake' })
+    .expect(401);
+});
+
+test('conversation mine without auth returns 401', async () => {
+  await request(app)
+    .get('/conversation/mine')
+    .expect(401);
+});
+
+test('conversation start without auth returns 401', async () => {
+  await request(app)
+    .post('/conversation/start')
+    .send({ inviteCode: 'fake' })
+    .expect(401);
+});

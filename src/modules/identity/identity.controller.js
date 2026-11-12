@@ -39,14 +39,21 @@ const getMe = async (req, res, next) => {
 const updatePseudo = async (req, res, next) => {
   try {
     const { pseudo } = req.body;
-    if (!pseudo || typeof pseudo !== 'string') {
-      return res.status(400).json({ message: 'pseudo requis' });
+    if (pseudo != null && typeof pseudo !== 'string') {
+      return res.status(400).json({ message: 'pseudo invalide' });
     }
-    const trimmed = pseudo.trim();
-    if (trimmed.length < 2 || trimmed.length > 30) {
-      return res.status(400).json({ message: 'Le pseudo doit contenir entre 2 et 30 caractères' });
+
+    const trimmed = typeof pseudo === 'string' ? pseudo.trim() : '';
+    if (typeof pseudo === 'string' && trimmed.length > 0) {
+      if (trimmed.length < 2 || trimmed.length > 30) {
+        return res.status(400).json({ message: 'Le pseudo doit contenir entre 2 et 30 caractères' });
+      }
     }
-    const user = await identityService.updatePseudo(req.user.id, trimmed);
+
+    const user = await identityService.updatePseudo(
+      req.user.id,
+      trimmed.length === 0 ? undefined : trimmed,
+    );
     res.status(200).json(user);
   } catch (error) {
     next(error);

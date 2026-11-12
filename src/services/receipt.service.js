@@ -25,10 +25,13 @@ const APPLE_SANDBOX_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
  * Verify an Apple receipt.
  * Returns { valid, expiresAt, productId, environment }.
  */
-const verifyAppleReceipt = async (receiptData) => {
+const verifyAppleReceipt = async (receiptData, expectedProductId, isSubscription = true) => {
   const secret = process.env.APPLE_SHARED_SECRET;
   if (!secret) {
     logger.error('[receipt] APPLE_SHARED_SECRET not set — rejecting receipt');
+    return { valid: false, expiresAt: null, productId: null, environment: 'unknown' };
+  }
+  if (!expectedProductId) {
     return { valid: false, expiresAt: null, productId: null, environment: 'unknown' };
   }
 
@@ -43,34 +46,62 @@ const verifyAppleReceipt = async (receiptData) => {
   // Status 21007 → receipt is from sandbox; retry against sandbox.
   if (result.status === 21007) {
     const sandboxResult = await _postJson(APPLE_SANDBOX_URL, body);
-    return _parseAppleResponse(sandboxResult);
+    return _parseAppleResponse(sandboxResult, expectedProductId, isSubscription);
   }
 
-  return _parseAppleResponse(result);
+  return _parseAppleResponse(result, expectedProductId, isSubscription);
 };
 
-function _parseAppleResponse(json) {
-  if (json.status !== 0) {
-    logger.warn({ status: json.status }, '[receipt] Apple verification failed');
-    return { valid: false, expiresAt: null, productId: null, environment: json.environment };
+function _parseAppleResponse(json, expectedProductId, isSubscription) {
+  if (!json || json.status !== 0 || !expectedProductId) {
+    logger.warn({ status: json?.status }, '[receipt] Apple verification failed');
+    return { valid: false, expiresAt: null, productId: null, environment: json?.environment };
   }
 
-  const latestInfo = json.latest_receipt_info;
-  if (!latestInfo || latestInfo.length === 0) {
-    return { valid: true, expiresAt: null, productId: null, environment: json.environment };
-  }
+  const transactions = isSubscription
+    ? (Array.isArray(json.latest_receipt_info) ? json.latest_receipt_info : [])
+    : [
+        ...(Array.isArray(json.receipt?.in_app) ? json.receipt.in_app : []),
+        ...(Array.isArray(json.latest_receipt_info) ? json.latest_receipt_info : []),
+      ];
+  const matchingTransactions = transactions.filter((transaction) => {
+    const purchasedAt = Number(transaction?.purchase_date_ms);
+    return (
+      transaction?.product_id === expectedProductId &&
+      Number.isFinite(purchasedAt) &&
+      purchasedAt > 0 &&
+      !transaction.cancellation_date_ms &&
+      !transaction.cancellation_date &&
+      !transaction.revocation_date_ms &&
+      !transaction.revocation_date
+    );
+  });
 
-  // Pick the most recent transaction.
-  const latest = latestInfo.sort(
-    (a, b) => Number(b.purchase_date_ms) - Number(a.purchase_date_ms),
-  )[0];
+  if (isSubscription) {
+    const activeTransactions = matchingTransactions
+      .map((transaction) => ({
+        transaction,
+        expiry: Number(transaction.expires_date_ms),
+      }))
+      .filter(({ expiry }) => Number.isFinite(expiry) && expiry > Date.now())
+      .sort((a, b) => b.expiry - a.expiry);
+    const latest = activeTransactions[0];
+    if (!latest) {
+      return { valid: false, expiresAt: null, productId: null, environment: json.environment };
+    }
+
+    return {
+      valid: true,
+      expiresAt: new Date(latest.expiry),
+      productId: latest.transaction.product_id,
+      environment: json.environment,
+    };
+  }
 
   return {
-    valid: true,
-    expiresAt: latest.expires_date_ms
-      ? new Date(Number(latest.expires_date_ms))
-      : null,
-    productId: latest.product_id,
+    valid: matchingTransactions.length > 0,
+    expiresAt: null,
+    productId: matchingTransactions.length > 0 ? expectedProductId : null,
     environment: json.environment,
   };
 }
@@ -109,7 +140,8 @@ const verifyGoogleReceipt = async (purchaseToken, productId, isSubscription = tr
   const resource = isSubscription ? 'subscriptions' : 'products';
   const url =
     `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/` +
-    `${packageName}/purchases/${resource}/${productId}/tokens/${purchaseToken}`;
+    `${encodeURIComponent(packageName)}/purchases/${resource}/` +
+    `${encodeURIComponent(productId)}/tokens/${encodeURIComponent(purchaseToken)}`;
 
   const result = await _getJson(url, accessToken);
   if (!result) {
@@ -117,12 +149,15 @@ const verifyGoogleReceipt = async (purchaseToken, productId, isSubscription = tr
   }
 
   if (isSubscription) {
-    // expiryTimeMillis is present for subscriptions.
-    const expiresAt = result.expiryTimeMillis
-      ? new Date(Number(result.expiryTimeMillis))
+    const expiryMillis = Number(result.expiryTimeMillis);
+    const expiresAt = Number.isFinite(expiryMillis) && expiryMillis > 0
+      ? new Date(expiryMillis)
       : null;
     const cancelled = result.cancelReason != null;
-    return { valid: !cancelled, expiresAt, productId };
+    const pendingPayment = result.paymentState != null &&
+      ![1, 2].includes(Number(result.paymentState));
+    const valid = !cancelled && !pendingPayment && expiresAt && expiresAt.getTime() > Date.now();
+    return { valid: !!valid, expiresAt: valid ? expiresAt : null, productId };
   }
 
   // Consumable: purchaseState 0 = purchased.
@@ -150,6 +185,10 @@ function _postJson(url, body) {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`Apple verification HTTP ${res.statusCode}`));
+            return;
+          }
           try {
             resolve(JSON.parse(data));
           } catch {
@@ -178,8 +217,14 @@ function _getJson(url, bearerToken) {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            logger.warn({ statusCode: res.statusCode }, '[receipt] Google verification rejected');
+            resolve(null);
+            return;
+          }
           try {
-            resolve(JSON.parse(data));
+            const json = JSON.parse(data);
+            resolve(json && typeof json === 'object' && !Array.isArray(json) ? json : null);
           } catch {
             logger.error('[receipt] Invalid JSON from Google');
             resolve(null);

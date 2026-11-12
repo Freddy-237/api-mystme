@@ -84,6 +84,19 @@ test('bearer token auth still works on protected endpoint', async () => {
   assert.equal(meRes.body?.notifications_enabled, true);
 });
 
+test('protected identity endpoint returns 401 without auth', async () => {
+  await request(app)
+    .get('/identity/me')
+    .expect(401);
+});
+
+test('protected identity endpoint returns 401 with invalid token', async () => {
+  await request(app)
+    .get('/identity/me')
+    .set('Authorization', 'Bearer invalid-token')
+    .expect(401);
+});
+
 test('notification preference is persisted on the user profile', async () => {
   const initRes = await request(app)
     .post('/identity/init')
@@ -126,4 +139,63 @@ test('session-token returns a bearer token for authenticated cookie session', as
 
   assert.equal(typeof tokenRes.body?.token, 'string');
   assert.ok(tokenRes.body.token.length > 20, 'session token should look like a JWT');
+});
+
+test('recovery restore endpoint is rate-limited by distributed middleware', async () => {
+  const forwardedFor = `198.51.100.${Math.floor(Date.now() / 1000) % 200 + 10}`;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await request(app)
+      .post('/identity/restore')
+      .set('x-forwarded-for', forwardedFor)
+      .send({ recoveryKey: 'ABCDE12345FG' })
+      .expect(401);
+  }
+
+  const limitedRes = await request(app)
+    .post('/identity/restore')
+    .set('x-forwarded-for', forwardedFor)
+    .send({ recoveryKey: 'ABCDE12345FG' })
+    .expect(429);
+
+  assert.equal(
+    limitedRes.body?.message,
+    'Trop de tentatives de récupération, réessaie dans une heure.',
+  );
+  assert.equal(limitedRes.body?.error, true);
+  assert.equal(limitedRes.headers['ratelimit-limit'], '5');
+});
+
+test('email otp request endpoint is rate-limited by distributed middleware', async () => {
+  const forwardedFor = `198.51.101.${Math.floor(Date.now() / 1000) % 200 + 10}`;
+  const initRes = await request(app)
+    .post('/identity/init')
+    .set('x-forwarded-for', forwardedFor)
+    .expect(201);
+
+  const token = initRes.body?.token;
+  assert.equal(typeof token, 'string');
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await request(app)
+      .post('/identity/email/request-otp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-forwarded-for', forwardedFor)
+      .send({ email: 'rate.limit@example.com' })
+      .expect(200);
+  }
+
+  const limitedRes = await request(app)
+    .post('/identity/email/request-otp')
+    .set('Authorization', `Bearer ${token}`)
+    .set('x-forwarded-for', forwardedFor)
+    .send({ email: 'rate.limit@example.com' })
+    .expect(429);
+
+  assert.equal(
+    limitedRes.body?.message,
+    'Trop de demandes OTP, réessaie dans 15 minutes.',
+  );
+  assert.equal(limitedRes.body?.error, true);
+  assert.equal(limitedRes.headers['ratelimit-limit'], '5');
 });

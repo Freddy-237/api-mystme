@@ -1,6 +1,7 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const crypto = require('crypto');
 const identityRepository = require('./identity.repository');
+const moderationRepository = require('../moderation/moderation.repository');
 const generatePseudo = require('../../utils/generatePseudo');
 const generateAvatar = require('../../utils/generateAvatar');
 const generateToken = require('../../utils/generateToken');
@@ -65,7 +66,17 @@ const getMe = async (userId) => {
   const user = await identityRepository.findById(userId);
   if (!user) throw new AppError('Utilisateur introuvable', 404);
   await identityRepository.updateLastSeen(userId);
-  return user;
+
+  const signalSummary = await moderationRepository.getUserSignalSummary(userId);
+  return {
+    ...user,
+    system_warning_message: signalSummary.auto_flagged
+      ? 'Avertissement du système: plusieurs signalements récents ont été détectés sur votre compte. Merci de respecter les règles de la communauté.'
+      : null,
+    system_warning_code: signalSummary.auto_flagged
+      ? 'moderation-threshold'
+      : null,
+  };
 };
 
 /**

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const conversationController = require('./conversation.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
 const validate = require('../../middlewares/validate.middleware');
@@ -24,7 +24,20 @@ router.post(
 );
 
 // GET /conversation/mine — get my conversations
-router.get('/mine', authMiddleware, conversationController.getMyConversations);
+router.get(
+  '/mine',
+  authMiddleware,
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('limit invalide'),
+  query('offset')
+    .optional()
+    .isInt({ min: 0, max: 10000 })
+    .withMessage('offset invalide'),
+  validate,
+  conversationController.getMyConversations,
+);
 
 // GET /conversation/:id — get single conversation
 router.get(

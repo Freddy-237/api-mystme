@@ -6,12 +6,7 @@ const logger = require('../utils/logger');
 let _transporter = null;
 let _emailApi = null;
 
-const hasSmtpConfig = () =>
-  !!(env.smtpHost && env.smtpPort && env.smtpUser && env.smtpPass && env.mailFrom);
-
-const hasBrevoApiConfig = () => !!env.brevoApiKey;
-
-const hasEmailConfig = () => hasBrevoApiConfig() || hasSmtpConfig();
+const { hasSmtpConfig, hasBrevoApiConfig, hasEmailConfig } = env;
 
 const parseMailFrom = (rawFrom) => {
   const value = String(rawFrom || '').trim();

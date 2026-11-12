@@ -1,6 +1,5 @@
 const logger = require('../utils/logger');
 const Sentry = require('../config/sentry');
-const env = require('../config/env');
 
 const errorMiddleware = (err, req, res, _next) => {
   if (err?.name === 'MulterError' && err?.code === 'LIMIT_FILE_SIZE') {
@@ -28,9 +27,12 @@ const errorMiddleware = (err, req, res, _next) => {
       extra: { requestId: req.requestId, method: req.method, url: req.originalUrl },
     });
   }
-  const message = statusCode >= 500 && env.isProduction
-    ? 'Internal server error'
-    : (err.message || 'Internal server error');
+
+  const message = statusCode >= 500
+    ? 'Le service est temporairement indisponible. Réessaie plus tard.'
+    : (typeof err.message === 'string' && err.message.trim()
+      ? err.message
+      : 'Une erreur est survenue.');
 
   res.status(statusCode).json({
     error: true,

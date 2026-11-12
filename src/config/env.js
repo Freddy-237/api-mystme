@@ -8,6 +8,24 @@ const parseOrigins = () => {
     .filter(Boolean);
 };
 
+const hasSmtpConfig = () =>
+  !!(
+    process.env.SMTP_HOST &&
+    process.env.SMTP_USER &&
+    process.env.SMTP_PASS &&
+    process.env.MAIL_FROM
+  );
+
+const hasBrevoApiConfig = () => !!process.env.BREVO_API_KEY;
+
+const hasEmailConfig = () => hasBrevoApiConfig() || hasSmtpConfig();
+
+const emailProvider = () => {
+  if (hasBrevoApiConfig()) return 'brevo';
+  if (hasSmtpConfig()) return 'smtp';
+  return 'none';
+};
+
 const parseBool = (value, fallback = false) => {
   if (value == null) return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
@@ -20,6 +38,19 @@ const requireInProduction = (name, value) => {
   return value;
 };
 
+const requiredProductionVars = [
+  'JWT_SECRET',
+  'CORS_ORIGINS',
+  'CLOUDINARY_CLOUD_NAME',
+  'CLOUDINARY_API_KEY',
+  'CLOUDINARY_API_SECRET',
+  'MODERATION_API_KEY',
+];
+
+requiredProductionVars.forEach((name) => {
+  requireInProduction(name, process.env[name]);
+});
+
 module.exports = {
   port: process.env.PORT || 5000,
   isProduction: process.env.NODE_ENV === 'production',
@@ -29,12 +60,17 @@ module.exports = {
       if (process.env.NODE_ENV === 'production') {
         throw new Error('JWT_SECRET is required in production');
       }
-      console.warn('⚠️  WARNING: JWT_SECRET is not set! Using insecure default for local dev only.');
+      console.warn('WARNING: JWT_SECRET is not set. Using insecure default for local dev only.');
       return 'default_secret';
     }
     return secret;
   })(),
   corsOrigins: parseOrigins(),
+  cloudinaryConfigured: !!(
+    process.env.CLOUDINARY_CLOUD_NAME &&
+    process.env.CLOUDINARY_API_KEY &&
+    process.env.CLOUDINARY_API_SECRET
+  ),
   authCookieName: process.env.AUTH_COOKIE_NAME || 'mystme_token',
   authCookieDomain: process.env.AUTH_COOKIE_DOMAIN || undefined,
   csrfCookieName: process.env.CSRF_COOKIE_NAME || 'mystme_csrf',
@@ -55,7 +91,9 @@ module.exports = {
     user: process.env.DATABASE_URL
       ? (process.env.DB_USER || 'postgres')
       : (requireInProduction('DB_USER', process.env.DB_USER) || 'postgres'),
-    password: process.env.DB_PASSWORD || '',
+    password: process.env.DATABASE_URL
+      ? (process.env.DB_PASSWORD || '')
+      : (requireInProduction('DB_PASSWORD', process.env.DB_PASSWORD) || ''),
     name: process.env.DATABASE_URL
       ? (process.env.DB_NAME || 'mystme')
       : (requireInProduction('DB_NAME', process.env.DB_NAME) || 'mystme'),
@@ -69,6 +107,14 @@ module.exports = {
   brevoApiKey: process.env.BREVO_API_KEY || '',
   brevoSenderEmail: process.env.BREVO_SENDER_EMAIL || '',
   brevoSenderName: process.env.BREVO_SENDER_NAME || '',
+  hasSmtpConfig,
+  hasBrevoApiConfig,
+  hasEmailConfig,
+  emailProvider: emailProvider(),
   moderationApiKey: process.env.MODERATION_API_KEY
     || (process.env.NODE_ENV === 'production' ? '' : 'dev-moderation-key'),
+  moderationAutoFlagThreshold: Math.max(
+    1,
+    parseInt(process.env.MODERATION_AUTO_FLAG_THRESHOLD || '3', 10) || 3,
+  ),
 };

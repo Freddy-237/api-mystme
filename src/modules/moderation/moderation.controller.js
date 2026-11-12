@@ -22,7 +22,7 @@ const reportMessage = async (req, res, next) => {
       req.user.id,
       reason
     );
-    res.status(201).json(report);
+    res.status(report.already_reported ? 200 : 201).json(report);
   } catch (error) {
     next(error);
   }

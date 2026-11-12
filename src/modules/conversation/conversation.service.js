@@ -67,8 +67,10 @@ const getConversation = async (conversationId, userId) => {
   return assertParticipant(conversationId, userId);
 };
 
-const getMyConversations = async (userId) => {
-  return conversationRepository.findByParticipantWithUnread(userId);
+const getMyConversations = async (userId, options = {}) => {
+  const limit = Number.isInteger(options.limit) ? options.limit : 50;
+  const offset = Number.isInteger(options.offset) ? options.offset : 0;
+  return conversationRepository.findByParticipantWithUnread(userId, { limit, offset });
 };
 
 const blockConversation = async (conversationId, userId) => {

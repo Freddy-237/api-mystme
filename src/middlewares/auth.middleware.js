@@ -12,7 +12,11 @@ const authMiddleware = async (req, res, next) => {
   }
 
   if (!token) {
-    return res.status(401).json({ message: 'Token manquant' });
+    return res.status(401).json({
+      error: true,
+      message: 'Authentification requise',
+      requestId: req.requestId,
+    });
   }
 
   try {
@@ -20,7 +24,11 @@ const authMiddleware = async (req, res, next) => {
     req.user = { id: user.id };
     next();
   } catch (error) {
-    return res.status(error.statusCode || 401).json({ message: error.message || 'Token expiré ou invalide' });
+    return res.status(error.statusCode || 401).json({
+      error: true,
+      message: error.message || 'Session expirée ou invalide',
+      requestId: req.requestId,
+    });
   }
 };
 

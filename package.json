@@ -6,7 +6,10 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/database/runMigration.js",
-    "test": "set NODE_ENV=test&& node src/database/runMigration.js && node --test"
+    "test": "set NODE_ENV=test&& node src/database/runMigration.js && node --test",
+    "verify-config": "node verify-config.js",
+    "check-config": "node verify-config.js",
+    "setup": "node setup-guide.js"
   },
   "description": "MystMe backend API",
   "dependencies": {
@@ -33,6 +36,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
+    "socket.io-client": "^4.8.3",
     "supertest": "^7.1.4"
   }
 }

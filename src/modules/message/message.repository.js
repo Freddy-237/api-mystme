@@ -141,15 +141,6 @@ const findMediaByConversation = async (
   limit = 50,
   offset = 0
 ) => {
-  const typeFilter = mediaType
-    ? 'AND m.media_type = $3'
-    : 'AND m.media_type IS NOT NULL';
-  const params = mediaType
-    ? [conversationId, viewerId, mediaType, limit, offset]
-    : [conversationId, viewerId, limit, offset];
-  const limitIdx = mediaType ? '$4' : '$3';
-  const offsetIdx = mediaType ? '$5' : '$4';
-
   const result = await pool.query(
     `${baseSelect}
      LEFT JOIN hidden_messages hm
@@ -158,10 +149,13 @@ const findMediaByConversation = async (
      WHERE m.conversation_id = $1
        AND m.is_deleted = FALSE
        AND hm.message_id IS NULL
-       ${typeFilter}
+       AND (
+         ($3::text IS NULL AND m.media_type IS NOT NULL)
+         OR m.media_type = $3
+       )
      ORDER BY m.created_at DESC
-     LIMIT ${limitIdx} OFFSET ${offsetIdx}`,
-    params
+     LIMIT $4 OFFSET $5`,
+    [conversationId, viewerId, mediaType || null, limit, offset]
   );
   return result.rows;
 };

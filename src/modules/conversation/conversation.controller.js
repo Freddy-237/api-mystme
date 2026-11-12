@@ -65,7 +65,12 @@ const getConversation = async (req, res, next) => {
 
 const getMyConversations = async (req, res, next) => {
   try {
-    const conversations = await conversationService.getMyConversations(req.user.id);
+    const limit = req.query.limit != null ? Number(req.query.limit) : undefined;
+    const offset = req.query.offset != null ? Number(req.query.offset) : undefined;
+    const conversations = await conversationService.getMyConversations(req.user.id, {
+      limit,
+      offset,
+    });
     res.json(conversations);
   } catch (error) {
     next(error);

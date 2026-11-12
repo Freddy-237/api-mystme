@@ -165,7 +165,9 @@ const blockConversation = async (id, queryable = pool) => {
 /**
  * Get conversations for a user with last message + unread count.
  */
-const findByParticipantWithUnread = async (userId) => {
+const findByParticipantWithUnread = async (userId, options = {}) => {
+  const limit = Number.isInteger(options.limit) ? options.limit : 50;
+  const offset = Number.isInteger(options.offset) ? options.offset : 0;
   const result = await pool.query(
     `SELECT
        c.*,
@@ -202,10 +204,22 @@ const findByParticipantWithUnread = async (userId) => {
      WHERE (c.owner_id = $1 OR c.anonymous_id = $1)
        AND c.status NOT IN ('deleted', 'blocked')
        AND COALESCE(cus.status, 'active') NOT IN ('deleted', 'archived')
-     ORDER BY COALESCE(lm.created_at, c.created_at) DESC`,
-    [userId]
+     ORDER BY COALESCE(lm.created_at, c.created_at) DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limit + 1, offset]
   );
-  return result.rows;
+  const hasMore = result.rows.length > limit;
+  const items = hasMore ? result.rows.slice(0, limit) : result.rows;
+
+  return {
+    items,
+    pageInfo: {
+      limit,
+      offset,
+      hasMore,
+      nextOffset: hasMore ? offset + items.length : null,
+    },
+  };
 };
 
 const archiveConversation = async (id, userId) => {

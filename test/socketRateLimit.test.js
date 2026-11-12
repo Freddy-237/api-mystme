@@ -58,7 +58,11 @@ test('blocks events exceeding the rate limit', async () => {
   assert.equal(await check(), false, 'third call exceeds limit');
   assert.equal(socket._emitted.length, 1, 'error emitted on third call');
   assert.equal(socket._emitted[0].event, 'error');
+  assert.equal(socket._emitted[0].data.error, true);
+  assert.equal(socket._emitted[0].data.code, 'RATE_LIMITED');
+  assert.equal(socket._emitted[0].data.message, 'Trop de requêtes. Réessaie plus tard.');
   assert.equal(socket._emitted[0].data.event, 'test_event');
+  assert.equal(socket._emitted[0].data.requestId, 'sock1');
 });
 
 test('sliding window expires old timestamps', async () => {

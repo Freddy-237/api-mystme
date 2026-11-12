@@ -45,12 +45,12 @@ const runMigration = async ({ closePool = true } = {}) => {
         ['001_init.sql']
       );
       applied.add('001_init.sql');
-      logger.info('ℹ️ Base existante détectée: 001_init.sql marqué comme déjà appliqué');
+      logger.info('Existing database detected: 001_init.sql marked as already applied');
     }
 
     for (const filename of files) {
       if (applied.has(filename)) {
-        logger.info({ migration: filename }, '↪️ Migration déjà appliquée, ignorée');
+        logger.info({ migration: filename }, 'Migration already applied, skipped');
         continue;
       }
 
@@ -63,17 +63,14 @@ const runMigration = async ({ closePool = true } = {}) => {
           [filename]
         );
         await pool.query('COMMIT');
-        logger.info({ migration: filename }, '✅ Migration appliquée');
+        logger.info({ migration: filename }, 'Migration applied');
       } catch (error) {
         await pool.query('ROLLBACK');
         throw error;
       }
     }
 
-    logger.info('✅ Migrations terminées avec succès');
-  } catch (err) {
-    logger.error('❌ Erreur lors de la migration:', err.message);
-    process.exitCode = 1;
+    logger.info('Migrations completed successfully');
   } finally {
     if (closePool) await pool.end();
   }
@@ -81,7 +78,10 @@ const runMigration = async ({ closePool = true } = {}) => {
 
 // Allow direct invocation: node src/database/runMigration.js
 if (require.main === module) {
-  runMigration();
+  runMigration().catch((err) => {
+    logger.error({ err }, 'Migration command failed');
+    process.exitCode = 1;
+  });
 }
 
 module.exports = runMigration;

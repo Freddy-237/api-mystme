@@ -238,6 +238,7 @@ module.exports = {
   createMediaMessage,
   createMediaMessageWithConversationState,
   sendMessageWithConversationState,
+  assertConversationWritable,
   searchMessages,
   getMedia,
 };

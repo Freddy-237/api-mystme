@@ -9,7 +9,10 @@ const sendPushToUser = async ({ userId, title, body, data = {} }) => {
   }
 
   const messaging = getMessaging();
-  if (!messaging) return false;
+  if (!messaging) {
+    logger.warn({ userId }, 'Firebase Messaging is not configured; push notification skipped');
+    return false;
+  }
 
   try {
     await messaging.send({

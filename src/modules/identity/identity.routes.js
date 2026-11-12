@@ -1,34 +1,28 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const rateLimit = require('express-rate-limit');
 const identityController = require('./identity.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
+const createRateLimit = require('../../middlewares/rateLimit.middleware');
 const validate = require('../../middlewares/validate.middleware');
 
 // ── Rate limiters for sensitive endpoints ────────────────────────────────────
-const recoveryLimiter = rateLimit({
+const recoveryLimiter = createRateLimit('http:identity:recovery', {
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
-  message: { error: 'Trop de tentatives de récupération, réessaye dans une heure' },
-  standardHeaders: true,
-  legacyHeaders: false,
+	maxRequests: 5,
+	message: 'Trop de tentatives de récupération, réessaie dans une heure.',
 });
 
-const otpRequestLimiter = rateLimit({
+const otpRequestLimiter = createRateLimit('http:identity:otp-request', {
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5,
-  message: { error: 'Trop de demandes OTP, réessaye dans 15 minutes' },
-  standardHeaders: true,
-  legacyHeaders: false,
+	maxRequests: 5,
+	message: 'Trop de demandes OTP, réessaie dans 15 minutes.',
 });
 
-const otpVerifyLimiter = rateLimit({
+const otpVerifyLimiter = createRateLimit('http:identity:otp-verify', {
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  message: { error: 'Trop de tentatives de vérification, réessaye dans 15 minutes' },
-  standardHeaders: true,
-  legacyHeaders: false,
+	maxRequests: 10,
+	message: 'Trop de tentatives de vérification, réessaie dans 15 minutes.',
 });
 
 // POST /identity/init — create anonymous user

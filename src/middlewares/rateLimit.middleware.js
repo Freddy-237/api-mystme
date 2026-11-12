@@ -34,7 +34,15 @@ const createRateLimit = (
       res.setHeader('RateLimit-Reset', String(Math.ceil(result.resetAt.getTime() / 1000)));
 
       if (!result.allowed) {
-        return res.status(429).json({ message });
+        const normalizedMessage = typeof message === 'string'
+          ? message
+          : message?.message;
+
+        return res.status(429).json({
+          error: true,
+          message: normalizedMessage || 'Trop de requêtes. Réessaie plus tard.',
+          requestId: req.requestId,
+        });
       }
 
       next();
