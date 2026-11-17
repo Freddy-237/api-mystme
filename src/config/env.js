@@ -44,7 +44,6 @@ const requiredProductionVars = [
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
   'CLOUDINARY_API_SECRET',
-  'MODERATION_API_KEY',
 ];
 
 requiredProductionVars.forEach((name) => {
@@ -111,8 +110,6 @@ module.exports = {
   hasBrevoApiConfig,
   hasEmailConfig,
   emailProvider: emailProvider(),
-  moderationApiKey: process.env.MODERATION_API_KEY
-    || (process.env.NODE_ENV === 'production' ? '' : 'dev-moderation-key'),
   moderationAutoFlagThreshold: Math.max(
     1,
     parseInt(process.env.MODERATION_AUTO_FLAG_THRESHOLD || '3', 10) || 3,

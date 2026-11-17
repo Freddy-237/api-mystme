@@ -182,21 +182,9 @@ const configureSMTP = async () => {
 const configureModeration = async () => {
   log.section('4. Moderation API Configuration');
 
-  console.log('The Moderation API protects against abuse and spam.\n');
-  console.log('Enter a strong random key (min 32 characters).');
-  console.log('Example: ' + require('crypto').randomBytes(24).toString('hex') + '\n');
-
-  const apiKey = await ask('Moderation API Key: ');
-
-  if (apiKey && apiKey.length >= 32) {
-    configs.moderation = apiKey;
-    log.success('Moderation API key configured');
-  } else if (apiKey) {
-    log.warn('Key is less than 32 characters - consider making it longer');
-    configs.moderation = apiKey;
-  } else {
-    log.warn('Moderation API key not configured');
-  }
+  console.log('Moderation happens in the back-office (admin.myst-me.com), with individual');
+  console.log('accounts and two-factor authentication. Create the first owner with:');
+  console.log('  npm run admin:create -- --email <email> --name "<nom>"\n');
 };
 
 const summary = async () => {
@@ -245,10 +233,6 @@ const buildEnvContent = () => {
       content += `SMTP_PASS=${configs.email.smtpPass}\n`;
       content += `MAIL_FROM=${configs.email.mailFrom}\n`;
     }
-  }
-
-  if (configs.moderation) {
-    content += `MODERATION_API_KEY=${configs.moderation}\n`;
   }
 
   return content;

@@ -5,6 +5,8 @@ const request = require('supertest');
 const app = require('../src/app');
 const env = require('../src/config/env');
 const pool = require('../src/config/database');
+const { loginAsAdmin } = require('./helpers/adminSession');
+const { userRef } = require('../src/modules/admin/admin.crypto');
 
 let identityInitCounter = 0;
 
@@ -30,11 +32,6 @@ function authed(req, { token, authCookie, csrfToken }) {
     .set(env.csrfHeaderName || 'x-csrf-token', csrfToken);
 }
 
-function withModerationAuth(req, actor = 'qa-reviewer') {
-  return req
-    .set('x-moderation-api-key', env.moderationApiKey)
-    .set('x-moderation-actor', actor);
-}
 
 async function createConversation(ownerAuth, anonAuth) {
   const linkRes = await request(app)
@@ -142,15 +139,14 @@ test('moderation report auto-flags after threshold of unique reporters', async (
 
   assert.equal(thirdRes.body.reported_user_id, undefined);
 
-  const pendingRes = await withModerationAuth(
-    request(app).get('/moderation/reports').query({ status: 'pending' }),
-  ).expect(200);
+  const moderator = await loginAsAdmin(app, 'moderator');
+  const pendingRes = await moderator.agent.get('/admin/reports?status=pending').expect(200);
 
-  const flaggedReport = pendingRes.body.find((report) => report.id === thirdRes.body.id);
-  assert.equal(flaggedReport.auto_flagged, true);
-  assert.equal(flaggedReport.unique_reporter_count, 3);
-  assert.equal(flaggedReport.reported_user_id, targetAnon.user.id);
-  assert.equal(flaggedReport.auto_flag_threshold, 3);
+  const flaggedReport = pendingRes.body.items.find((report) => report.id === thirdRes.body.id);
+  assert.equal(flaggedReport.target.autoFlagged, true);
+  assert.equal(flaggedReport.target.uniqueReporters, 3);
+  assert.equal(flaggedReport.target.ref, userRef(targetAnon.user.id));
+  assert.equal(flaggedReport.reportedRole, 'anonymous');
 
   const meRes = await authed(
     request(app).get('/identity/me'),
@@ -188,8 +184,12 @@ test('moderation report rejects a message from another conversation', async () =
   assert.equal(reportRes.body.message, 'Message de signalement invalide');
 });
 
-test('moderation reports listing requires internal moderation auth', async () => {
-  await request(app).get('/moderation/reports').expect(401);
+test('the former shared-key moderation console is gone', async () => {
+  await request(app).get('/moderation/reports').set('x-moderation-api-key', 'dev-moderation-key').expect(404);
+  await request(app).post('/moderation/report/00000000-0000-4000-8000-000000000000/review')
+    .set('x-moderation-api-key', 'dev-moderation-key').send({ decision: 'dismissed' }).expect(404);
+  // Reviewing now requires a back-office session.
+  await request(app).get('/admin/reports').expect(401);
 });
 
 test('moderation report without auth returns 401', async () => {
@@ -212,22 +212,17 @@ test('moderation review can dismiss a report', async () => {
     owner,
   ).expect(201);
 
-  const pendingRes = await withModerationAuth(
-    request(app).get('/moderation/reports').query({ status: 'pending' }),
-  ).expect(200);
+  const moderator = await loginAsAdmin(app, 'moderator', 'Ops Dismiss');
+  const pendingRes = await moderator.agent.get('/admin/reports?status=pending').expect(200);
+  assert.ok(pendingRes.body.items.some((report) => report.id === reportRes.body.id));
 
-  assert.ok(pendingRes.body.some((report) => report.id === reportRes.body.id));
+  const reviewRes = await moderator.post(`/admin/reports/${reportRes.body.id}/review`, {
+    decision: 'dismissed', note: 'false positive',
+  }).expect(200);
 
-  const reviewRes = await withModerationAuth(
-    request(app)
-      .post(`/moderation/report/${reportRes.body.id}/review`)
-      .send({ decision: 'dismissed', note: 'false positive' }),
-    'ops-dismiss',
-  ).expect(200);
-
-  assert.equal(reviewRes.body.status, 'dismissed');
-  assert.equal(reviewRes.body.reviewed_by, 'ops-dismiss');
-  assert.equal(reviewRes.body.decision_note, 'false positive');
+  assert.equal(reviewRes.body.report.status, 'dismissed');
+  assert.equal(reviewRes.body.report.reviewedBy, 'Ops Dismiss');
+  assert.equal(reviewRes.body.report.decisionNote, 'false positive');
 });
 
 test('moderation review can hide a message, block conversation and ban reported user', async () => {
@@ -249,22 +244,18 @@ test('moderation review can hide a message, block conversation and ban reported 
     owner,
   ).expect(201);
 
-  const reviewRes = await withModerationAuth(
-    request(app)
-      .post(`/moderation/report/${reportRes.body.id}/review`)
-      .send({
-        decision: 'reviewed',
-        note: 'confirmed abuse',
-        hideMessage: true,
-        blockConversation: true,
-        banUser: true,
-        banReason: 'Abusive behavior',
-      }),
-    'ops-ban',
-  ).expect(200);
+  const moderator = await loginAsAdmin(app, 'moderator', 'Ops Ban');
+  const reviewRes = await moderator.post(`/admin/reports/${reportRes.body.id}/review`, {
+    decision: 'reviewed',
+    note: 'confirmed abuse',
+    hideMessage: true,
+    blockConversation: true,
+    banUser: true,
+    banReason: 'Abusive behavior',
+  }).expect(200);
 
-  assert.equal(reviewRes.body.status, 'reviewed');
-  assert.equal(reviewRes.body.reviewed_by, 'ops-ban');
+  assert.equal(reviewRes.body.report.status, 'reviewed');
+  assert.equal(reviewRes.body.report.reviewedBy, 'Ops Ban');
 
   const messageState = await pool.query('SELECT is_deleted FROM messages WHERE id = $1', [messageRes.body.id]);
   assert.equal(messageState.rows[0].is_deleted, true);
