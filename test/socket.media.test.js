@@ -21,9 +21,21 @@ test('normalizeSocketMediaPayload rejects oversized files', () => {
     () => __private.normalizeSocketMediaPayload({
       conversationId: 'conv-1',
       mediaType: 'file',
+      filename: 'big.pdf',
       bytes: tooLarge,
     }),
     /Fichier trop volumineux/,
+  );
+});
+
+test('normalizeSocketMediaPayload rejects files without an allowed extension', () => {
+  assert.throws(
+    () => __private.normalizeSocketMediaPayload({
+      conversationId: 'conv-1',
+      mediaType: 'file',
+      bytes: Buffer.from([1, 2, 3]),
+    }),
+    /Type de fichier non autorisé/,
   );
 });
 

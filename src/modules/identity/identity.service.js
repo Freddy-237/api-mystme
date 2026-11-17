@@ -8,11 +8,51 @@ const generateToken = require('../../utils/generateToken');
 const AppError = require('../../utils/AppError');
 const env = require('../../config/env');
 const { sendOtpEmail, hasEmailConfig } = require('../../services/mail.service');
-const { requireActiveUserById, assertUserIsActive } = require('./identity.auth');
+const { requireActiveUserById } = require('./identity.auth');
+const withTransaction = require('../../utils/withTransaction');
+const {
+  ORIGINS,
+  computeWebExpiresAt,
+  computeWebPurgeAt,
+  isWebLocked,
+} = require('../../config/webTrial');
 
 const RECOVERY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RECOVERY_RAW_LENGTH = 20;
 const OTP_TTL_MINUTES = 10;
+const OTP_MAX_ATTEMPTS = 5;
+
+// Whitelist of user fields a client may see. push_token, recovery_key_hash,
+// ban and tier internals stay server-side.
+const PUBLIC_USER_FIELDS = [
+  'id',
+  'anonymous_uid',
+  'pseudo',
+  'avatar_url',
+  'bio',
+  'email',
+  'email_verified_at',
+  'notifications_enabled',
+  'origin',
+  'web_expires_at',
+  'last_seen_at',
+  'created_at',
+];
+
+const toPublicUser = (user) => {
+  if (!user) return user;
+  const out = {};
+  for (const field of PUBLIC_USER_FIELDS) {
+    if (user[field] !== undefined) out[field] = user[field];
+  }
+  // Derived web-trial state so clients never re-implement the rules.
+  if (user.origin !== undefined) {
+    const isWeb = user.origin === ORIGINS.WEB;
+    out.web_locked = isWebLocked(user);
+    out.web_purge_at = isWeb ? computeWebPurgeAt(user.web_expires_at) : null;
+  }
+  return out;
+};
 
 const hashRecoveryKey = (value) =>
   crypto.createHash('sha256').update(value).digest('hex');
@@ -44,7 +84,12 @@ const generateOtpCode = () => {
   return String(num).padStart(6, '0');
 };
 
-const initIdentity = async () => {
+/**
+ * @param {{ origin?: 'web'|'app' }} [options] — 'web' for the PWA (7-day
+ *   write window), anything else is an app identity (never expires).
+ */
+const initIdentity = async ({ origin } = {}) => {
+  const normalizedOrigin = origin === ORIGINS.WEB ? ORIGINS.WEB : ORIGINS.APP;
   const id = uuidv4();
   const anonymousUid = uuidv4();
   const pseudo = generatePseudo();
@@ -55,11 +100,13 @@ const initIdentity = async () => {
     anonymous_uid: anonymousUid,
     pseudo,
     avatar_url: avatar,
+    origin: normalizedOrigin,
+    web_expires_at: normalizedOrigin === ORIGINS.WEB ? computeWebExpiresAt() : null,
   });
 
   const token = generateToken(user.id);
 
-  return { user, token };
+  return { user: toPublicUser(user), token };
 };
 
 const getMe = async (userId) => {
@@ -69,7 +116,7 @@ const getMe = async (userId) => {
 
   const signalSummary = await moderationRepository.getUserSignalSummary(userId);
   return {
-    ...user,
+    ...toPublicUser(user),
     system_warning_message: signalSummary.auto_flagged
       ? 'Avertissement du système: plusieurs signalements récents ont été détectés sur votre compte. Merci de respecter les règles de la communauté.'
       : null,
@@ -91,7 +138,7 @@ const updatePseudo = async (userId, pseudo) => {
   const newAvatar = generateAvatar(newPseudo);
 
   const updated = await identityRepository.updatePseudoAndAvatar(userId, newPseudo, newAvatar);
-  return updated;
+  return toPublicUser(updated);
 };
 
 /**
@@ -103,7 +150,7 @@ const updateBio = async (userId, bio) => {
 
   const trimmed = (bio || '').slice(0, 120);
   const updated = await identityRepository.updateBio(userId, trimmed);
-  return updated;
+  return toPublicUser(updated);
 };
 
 const updateNotificationPreference = async (userId, enabled) => {
@@ -117,7 +164,7 @@ const updateNotificationPreference = async (userId, enabled) => {
     userId,
     enabled,
   );
-  return updated;
+  return toPublicUser(updated);
 };
 
 const updatePushToken = async (userId, token) => {
@@ -130,14 +177,30 @@ const updatePushToken = async (userId, token) => {
   }
 
   const updated = await identityRepository.updatePushToken(userId, cleanToken);
-  return updated;
+  return toPublicUser(updated);
 };
 
 const issueSessionToken = async (userId) => {
   const user = await requireActiveUserById(userId);
 
-  const token = generateToken(user.id);
+  const token = generateToken(user.id, user.session_version);
   return { token };
+};
+
+/** Log out everywhere: every token issued so far stops working. */
+const logout = async (userId) => {
+  await identityRepository.bumpSessionVersion(userId);
+};
+
+/**
+ * Permanently delete the account and everything attached to it.
+ * @returns {{ userIds: string[], conversationIds: string[], media: object[], peers: object[] }}
+ */
+const deleteAccount = async (userId) => {
+  const result = await withTransaction((client) =>
+    identityRepository.deleteAccountData(client, userId));
+  if (!result) throw new AppError('Utilisateur introuvable', 404);
+  return result;
 };
 
 const generateRecoveryKey = async (userId) => {
@@ -163,11 +226,44 @@ const restoreByRecoveryKey = async (recoveryKey) => {
   const keyHash = hashRecoveryKey(normalized);
   const user = await identityRepository.findByRecoveryKeyHash(keyHash);
   if (!user) throw new AppError('Clé de récupération invalide', 401);
-  assertUserIsActive(user);
+  // baseUserSelect has no ban columns: check ban state explicitly.
+  const authState = await requireActiveUserById(user.id);
 
   await identityRepository.updateLastSeen(user.id);
-  const token = generateToken(user.id);
-  return { user, token };
+  const token = generateToken(user.id, authState.session_version);
+  return { user: toPublicUser(user), token };
+};
+
+/**
+ * Shared OTP check: existence, expiry, attempts, hash, atomic consumption.
+ * Wrong codes are counted; after OTP_MAX_ATTEMPTS the code is burned.
+ */
+const verifyOtpOrThrow = async (otp, normalizedEmail, code) => {
+  // Missing code answers like a wrong code: no hint about account existence.
+  if (!otp) throw new AppError('Code OTP invalide', 400);
+  if (Number(otp.failed_attempts || 0) >= OTP_MAX_ATTEMPTS) {
+    throw new AppError('Trop de tentatives. Demande un nouveau code.', 429);
+  }
+  if (otp.consumed_at) throw new AppError('Code OTP déjà utilisé', 409);
+  if (new Date(otp.expires_at).getTime() < Date.now()) {
+    throw new AppError('Code OTP expiré', 410);
+  }
+
+  const cleanCode = String(code || '').trim();
+  const expectedHash = hashRecoveryKey(`${normalizedEmail}:${cleanCode}`);
+  const matches = expectedHash.length === otp.code_hash.length
+    && crypto.timingSafeEqual(Buffer.from(expectedHash), Buffer.from(otp.code_hash));
+
+  if (!matches) {
+    const attempts = await identityRepository.registerFailedOtpAttempt(otp.id, OTP_MAX_ATTEMPTS);
+    if (attempts >= OTP_MAX_ATTEMPTS) {
+      throw new AppError('Trop de tentatives. Demande un nouveau code.', 429);
+    }
+    throw new AppError('Code OTP invalide', 400);
+  }
+
+  const consumed = await identityRepository.consumeEmailOtp(otp.id);
+  if (!consumed) throw new AppError('Code OTP déjà utilisé', 409);
 };
 
 const requestEmailOtp = async (userId, email) => {
@@ -230,20 +326,8 @@ const verifyEmailOtp = async (userId, email, code) => {
     userId,
     email: normalizedEmail,
   });
+  await verifyOtpOrThrow(latestOtp, normalizedEmail, code);
 
-  if (!latestOtp) throw new AppError('Code OTP introuvable', 404);
-  if (latestOtp.consumed_at) throw new AppError('Code OTP déjà utilisé', 409);
-  if (new Date(latestOtp.expires_at).getTime() < Date.now()) {
-    throw new AppError('Code OTP expiré', 410);
-  }
-
-  const cleanCode = String(code || '').trim();
-  const expectedHash = hashRecoveryKey(`${normalizedEmail}:${cleanCode}`);
-  if (expectedHash !== latestOtp.code_hash) {
-    throw new AppError('Code OTP invalide', 401);
-  }
-
-  await identityRepository.consumeEmailOtp(latestOtp.id);
   const user = await identityRepository.setVerifiedEmail({
     userId,
     email: normalizedEmail,
@@ -251,7 +335,7 @@ const verifyEmailOtp = async (userId, email, code) => {
 
   return {
     ok: true,
-    user,
+    user: toPublicUser(user),
   };
 };
 
@@ -269,15 +353,22 @@ const requestEmailRestore = async (email) => {
     throw new AppError('Service email indisponible', 503);
   }
 
+  const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+  // Same answer whether or not the email exists, so this endpoint cannot be
+  // used to discover which emails have an account.
+  const genericPayload = {
+    ok: true,
+    email: normalizedEmail,
+    expiresAt: expiresAt.toISOString(),
+  };
+
   const user = await identityRepository.findByEmail(normalizedEmail);
   if (!user || !user.email_verified_at) {
-    // Don't reveal whether the email exists — generic message
-    throw new AppError('Aucun compte vérifié avec cet email', 404);
+    return { ...genericPayload, delivery: 'sent' };
   }
 
   const code = generateOtpCode();
   const codeHash = hashRecoveryKey(`${normalizedEmail}:${code}`);
-  const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
 
   await identityRepository.createEmailOtp({
     id: uuidv4(),
@@ -285,6 +376,7 @@ const requestEmailRestore = async (email) => {
     email: normalizedEmail,
     codeHash,
     expiresAt,
+    purpose: 'restore',
   });
 
   const mailResult = await sendOtpEmail({
@@ -294,9 +386,7 @@ const requestEmailRestore = async (email) => {
   });
 
   const payload = {
-    ok: true,
-    email: normalizedEmail,
-    expiresAt: expiresAt.toISOString(),
+    ...genericPayload,
     delivery: mailResult.sent ? 'sent' : 'debug',
   };
 
@@ -317,30 +407,20 @@ const verifyEmailRestore = async (email, code) => {
   }
 
   const latestOtp = await identityRepository.findLatestEmailOtpByEmail(normalizedEmail);
-  if (!latestOtp) throw new AppError('Code OTP introuvable', 404);
-  if (latestOtp.consumed_at) throw new AppError('Code OTP déjà utilisé', 409);
-  if (new Date(latestOtp.expires_at).getTime() < Date.now()) {
-    throw new AppError('Code OTP expiré', 410);
-  }
-
-  const cleanCode = String(code || '').trim();
-  const expectedHash = hashRecoveryKey(`${normalizedEmail}:${cleanCode}`);
-  if (expectedHash !== latestOtp.code_hash) {
-    throw new AppError('Code OTP invalide', 401);
-  }
-
-  await identityRepository.consumeEmailOtp(latestOtp.id);
+  await verifyOtpOrThrow(latestOtp, normalizedEmail, code);
 
   const user = await identityRepository.findByEmail(normalizedEmail);
   if (!user) throw new AppError('Utilisateur introuvable', 404);
-  assertUserIsActive(user);
+  const authState = await requireActiveUserById(user.id);
 
   await identityRepository.updateLastSeen(user.id);
-  const token = generateToken(user.id);
-  return { user, token };
+  const token = generateToken(user.id, authState.session_version);
+  return { user: toPublicUser(user), token };
 };
 
 module.exports = {
+  OTP_MAX_ATTEMPTS,
+  toPublicUser,
   initIdentity,
   getMe,
   updatePseudo,
@@ -348,6 +428,8 @@ module.exports = {
   updateNotificationPreference,
   updatePushToken,
   issueSessionToken,
+  logout,
+  deleteAccount,
   generateRecoveryKey,
   restoreByRecoveryKey,
   requestEmailOtp,

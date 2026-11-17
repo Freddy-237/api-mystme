@@ -4,9 +4,8 @@ const logger = require('../../utils/logger');
 const createLink = async (req, res, next) => {
   try {
     logger.info({ userId: req.user.id }, '[link.controller] createLink called');
-    const link = await linkService.createLink(req.user.id);
-    logger.info({ userId: req.user.id, linkId: link.id }, '[link.controller] createLink OK');
-    res.status(201).json(link);
+    const { link, created } = await linkService.createLink(req.user.id);
+    res.status(created ? 201 : 200).json(link);
   } catch (error) {
     logger.error({ err: error, userId: req.user?.id }, '[link.controller] createLink FAILED');
     next(error);
@@ -17,7 +16,6 @@ const getLinkByCode = async (req, res, next) => {
   try {
     logger.info('[link.controller] getLinkByCode called');
     const link = await linkService.getLinkByCode(req.params.code);
-    logger.info({ linkId: link.id }, '[link.controller] getLinkByCode OK');
     res.json(link);
   } catch (error) {
     logger.error({ err: error }, '[link.controller] getLinkByCode FAILED');

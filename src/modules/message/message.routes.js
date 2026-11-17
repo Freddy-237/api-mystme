@@ -13,10 +13,17 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES },
 });
 
-const withFile = (fieldName, isValidType, invalidMessage) => [
+const {
+  isAllowedImage,
+  isAllowedVideo,
+  isAllowedAudio,
+  isAllowedFile,
+} = require('../../utils/mediaPolicy');
+
+const withFile = (fieldName, isValidFile, invalidMessage) => [
   upload.single(fieldName),
   (req, res, next) => {
-    if (!req.file || !isValidType(req.file.mimetype)) {
+    if (!req.file || !isValidFile(req.file)) {
       return res.status(400).json({ message: invalidMessage });
     }
     return next();
@@ -38,7 +45,7 @@ router.post(
 router.post(
   '/video',
   authMiddleware,
-  ...withFile('video', (mimetype) => mimetype.startsWith('video/'), 'Fichier vidéo invalide'),
+  ...withFile('video', isAllowedVideo, 'Format vidéo non supporté'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendVideo,
@@ -48,7 +55,7 @@ router.post(
 router.post(
   '/image',
   authMiddleware,
-  ...withFile('image', (mimetype) => mimetype.startsWith('image/'), 'Fichier image invalide'),
+  ...withFile('image', isAllowedImage, 'Format image non supporté'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendImage,
@@ -58,7 +65,7 @@ router.post(
 router.post(
   '/file',
   authMiddleware,
-  ...withFile('file', (mimetype) => Boolean(mimetype), 'Fichier invalide'),
+  ...withFile('file', isAllowedFile, 'Type de fichier non autorisé (pdf, txt, documents Office)'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendFile,
@@ -68,7 +75,7 @@ router.post(
 router.post(
   '/audio',
   authMiddleware,
-  ...withFile('audio', (mimetype) => mimetype.startsWith('audio/'), 'Fichier audio invalide'),
+  ...withFile('audio', isAllowedAudio, 'Format audio non supporté'),
   body('conversationId').isUUID().withMessage('conversationId invalide'),
   validate,
   messageController.sendAudio,

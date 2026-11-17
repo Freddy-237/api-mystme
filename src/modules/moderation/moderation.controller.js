@@ -22,7 +22,17 @@ const reportMessage = async (req, res, next) => {
       req.user.id,
       reason
     );
-    res.status(report.already_reported ? 200 : 201).json(report);
+    // The full report (participant ids, pseudos, report counts) is for
+    // moderators only. The reporter just gets an acknowledgement.
+    res.status(report.already_reported ? 200 : 201).json({
+      id: report.id,
+      conversation_id: report.conversation_id,
+      message_id: report.message_id,
+      reason: report.reason,
+      status: report.status,
+      created_at: report.created_at,
+      already_reported: !!report.already_reported,
+    });
   } catch (error) {
     next(error);
   }

@@ -50,6 +50,14 @@ const getBrevoEmailApi = () => {
   return _emailApi;
 };
 
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const sendOtpViaBrevoApi = async ({ to, code, pseudo }) => {
   const emailApi = getBrevoEmailApi();
   if (!emailApi) return false;
@@ -67,7 +75,7 @@ const sendOtpViaBrevoApi = async ({ to, code, pseudo }) => {
     to: [{ email: to }],
     subject: 'Code OTP MystMe',
     htmlContent: [
-      `<p>Salut ${pseudo || 'MystMe user'},</p>`,
+      `<p>Salut ${escapeHtml(pseudo || 'MystMe user')},</p>`,
       '<p>Voici ton code OTP MystMe :</p>',
       `<h2 style="letter-spacing:2px">${code}</h2>`,
       '<p>Ce code expire dans 10 minutes.</p>',

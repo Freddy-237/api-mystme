@@ -55,18 +55,24 @@ const runMigration = async ({ closePool = true } = {}) => {
       }
 
       const sql = fs.readFileSync(path.join(migrationDir, filename), 'utf-8');
-      await pool.query('BEGIN');
+      // One dedicated connection per migration: with pool.query() each
+      // statement may run on a different connection, so BEGIN/COMMIT would
+      // not wrap anything and a failing migration could be left half-applied.
+      const client = await pool.connect();
       try {
-        await pool.query(sql);
-        await pool.query(
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query(
           'INSERT INTO schema_migrations (filename) VALUES ($1)',
           [filename]
         );
-        await pool.query('COMMIT');
+        await client.query('COMMIT');
         logger.info({ migration: filename }, 'Migration applied');
       } catch (error) {
-        await pool.query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         throw error;
+      } finally {
+        client.release();
       }
     }
 

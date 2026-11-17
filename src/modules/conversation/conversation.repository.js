@@ -1,19 +1,14 @@
 const pool = require('../../config/database');
-const {
-  CONVERSATION_EXPIRY_SQL_INTERVAL,
-} = require('./conversation.expiry');
+const generatePseudo = require('../../utils/generatePseudo');
+const generateAvatar = require('../../utils/generateAvatar');
 
+// Conversations do not expire (web identities do — see config/webTrial.js).
 const baseConversationSelect = `
   SELECT c.*,
-         CASE
-           WHEN c.started_at IS NULL THEN NULL
-           ELSE c.started_at + ${CONVERSATION_EXPIRY_SQL_INTERVAL}
-         END AS expires_at,
          ou.pseudo AS owner_pseudo,
-         au.pseudo AS anonymous_pseudo
+         COALESCE(c.anonymous_alias, 'Anonyme') AS anonymous_pseudo
   FROM conversations c
   LEFT JOIN users ou ON ou.id = c.owner_id
-  LEFT JOIN users au ON au.id = c.anonymous_id
 `;
 
 const execute = (queryable, query, values) => {
@@ -65,6 +60,44 @@ const isParticipant = async (conversationId, userId, queryable = pool) => {
     queryable,
     'SELECT 1 FROM conversations WHERE id = $1 AND (owner_id = $2 OR anonymous_id = $2)',
     [conversationId, userId],
+  );
+  return result.rows.length > 0;
+};
+
+/** Just the two participant ids (cheap lookup for socket events). */
+const findParticipants = async (conversationId, queryable = pool) => {
+  const result = await execute(
+    queryable,
+    'SELECT id, owner_id, anonymous_id FROM conversations WHERE id = $1',
+    [conversationId],
+  );
+  return result.rows[0] || null;
+};
+
+/**
+ * Conversations where `ownerId` is the link owner. Presence is one-way: only
+ * the owner's presence is shown (to their anonymous correspondents).
+ */
+const findOwnedConversationPeers = async (ownerId, queryable = pool) => {
+  const result = await execute(
+    queryable,
+    `SELECT DISTINCT owner_id, anonymous_id
+       FROM conversations
+      WHERE owner_id = $1
+        AND anonymous_id IS NOT NULL
+        AND started_at IS NOT NULL
+        AND status != 'blocked'`,
+    [ownerId],
+  );
+  return result.rows;
+};
+
+/** True when `anonymousId` writes anonymously to `ownerId` in some conversation. */
+const isAnonymousCorrespondentOf = async (ownerId, anonymousId, queryable = pool) => {
+  const result = await execute(
+    queryable,
+    'SELECT 1 FROM conversations WHERE owner_id = $1 AND anonymous_id = $2 LIMIT 1',
+    [ownerId, anonymousId],
   );
   return result.rows.length > 0;
 };
@@ -121,11 +154,20 @@ const findOrCreateByLinkAndAnonymous = async ({ id, link_id, owner_id, anonymous
       };
     }
 
+    // Name/avatar of the anonymous side, frozen for this conversation.
+    // An app user's pseudo is public (it is shown on their own link), so it
+    // must never be reused here: they get a random alias per conversation.
+    // A web (PWA) identity keeps its throwaway pseudo, shown nowhere else.
+    const alias = generatePseudo();
     const result = await client.query(
-      `INSERT INTO conversations (id, owner_id, anonymous_id, link_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO conversations (id, owner_id, anonymous_id, link_id, anonymous_alias, anonymous_avatar_url)
+       SELECT $1, $2, $3, $4,
+              CASE WHEN u.origin = 'web' THEN u.pseudo ELSE $5::text END,
+              CASE WHEN u.origin = 'web' THEN u.avatar_url ELSE $6::text END
+         FROM users u
+        WHERE u.id = $3
        RETURNING id`,
-      [id, owner_id, anonymous_id, link_id],
+      [id, owner_id, anonymous_id, link_id, alias, generateAvatar(alias)],
     );
     const conversationId = result.rows[0].id;
 
@@ -171,19 +213,14 @@ const findByParticipantWithUnread = async (userId, options = {}) => {
   const result = await pool.query(
     `SELECT
        c.*,
-       CASE
-         WHEN c.started_at IS NULL THEN NULL
-         ELSE c.started_at + ${CONVERSATION_EXPIRY_SQL_INTERVAL}
-       END               AS expires_at,
        lm.content          AS last_message,
        lm.sender_id        AS last_message_sender_id,
        lm.created_at       AS last_message_at,
        COALESCE(uc.cnt, 0) AS unread_count,
        ou.pseudo            AS owner_pseudo,
-       au.pseudo            AS anonymous_pseudo
+       COALESCE(c.anonymous_alias, 'Anonyme') AS anonymous_pseudo
      FROM conversations c
      LEFT JOIN users ou ON ou.id = c.owner_id
-     LEFT JOIN users au ON au.id = c.anonymous_id
      LEFT JOIN LATERAL (
        SELECT content, sender_id, created_at
        FROM messages
@@ -202,6 +239,9 @@ const findByParticipantWithUnread = async (userId, options = {}) => {
      LEFT JOIN conversation_user_status cus
        ON cus.conversation_id = c.id AND cus.user_id = $1
      WHERE (c.owner_id = $1 OR c.anonymous_id = $1)
+       -- The link owner only sees a conversation once a first message exists
+       -- (opening a link without writing must not create noise).
+       AND (c.started_at IS NOT NULL OR c.anonymous_id = $1)
        AND c.status NOT IN ('deleted', 'blocked')
        AND COALESCE(cus.status, 'active') NOT IN ('deleted', 'archived')
      ORDER BY COALESCE(lm.created_at, c.created_at) DESC
@@ -277,6 +317,9 @@ module.exports = {
   findByLinkAndAnonymous,
   findOrCreateByLinkAndAnonymous,
   isParticipant,
+  findParticipants,
+  findOwnedConversationPeers,
+  isAnonymousCorrespondentOf,
   hasSharedConversation,
   reactivateForUsers,
   updateStatus,

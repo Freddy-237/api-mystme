@@ -1,4 +1,12 @@
+const crypto = require('crypto');
 const env = require('../config/env');
+
+// Constant-time comparison (hashing first also hides the key length).
+const safeEqual = (a, b) => {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+};
 
 const moderationAuthMiddleware = (req, res, next) => {
   if (!env.moderationApiKey) {
@@ -10,7 +18,7 @@ const moderationAuthMiddleware = (req, res, next) => {
   }
 
   const providedKey = req.headers['x-moderation-api-key'];
-  if (!providedKey || providedKey !== env.moderationApiKey) {
+  if (typeof providedKey !== 'string' || !providedKey || !safeEqual(providedKey, env.moderationApiKey)) {
     return res.status(401).json({
       error: true,
       message: 'Clé API de modération invalide',

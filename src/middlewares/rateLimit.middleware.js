@@ -1,13 +1,10 @@
 const distributedRateLimitStore = require('../utils/distributedRateLimitStore');
 const logger = require('../utils/logger');
 
-const getDefaultKey = (req) => {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || 'unknown';
-};
+// Never read X-Forwarded-For directly: its leftmost entries are client-controlled.
+// With `app.set('trust proxy', 1)`, Express resolves req.ip from the entry
+// appended by our single trusted proxy (Railway edge), which cannot be spoofed.
+const getDefaultKey = (req) => req.ip || req.socket?.remoteAddress || 'unknown';
 
 const createRateLimit = (
   scope,
@@ -54,3 +51,4 @@ const createRateLimit = (
 };
 
 module.exports = createRateLimit;
+module.exports.getDefaultKey = getDefaultKey;

@@ -31,12 +31,23 @@ function authed(req, { token, authCookie, csrfToken }) {
     .set(env.csrfHeaderName || 'x-csrf-token', csrfToken);
 }
 
+// The owner only sees a conversation once the anonymous side has written.
+async function createVisibleConversation(ownerAuth, anonAuth) {
+  const conversationId = await createConversation(ownerAuth, anonAuth);
+  await authed(
+    request(app).post('/message').send({ conversationId, content: 'hello' }),
+    anonAuth,
+  ).expect(201);
+  return conversationId;
+}
+
 async function createConversation(ownerAuth, anonAuth) {
   // Owner creates a link
   const linkRes = await request(app)
     .post('/link')
-    .set('Authorization', `Bearer ${ownerAuth.token}`)
-    .expect(201);
+    .set('Authorization', `Bearer ${ownerAuth.token}`);
+  // 201 the first time, 200 afterwards: a user keeps one active link.
+  assert.ok([200, 201].includes(linkRes.status), `unexpected status ${linkRes.status}`);
 
   const inviteCode = linkRes.body.code;
 
@@ -188,7 +199,7 @@ test('subscription verify rejects missing fields', async () => {
 test('get conversations lists the user conversations', async () => {
   const owner = await initIdentity();
   const anon = await initIdentity();
-  await createConversation(owner, anon);
+  await createVisibleConversation(owner, anon);
 
   const res = await request(app)
     .get('/conversation/mine')
@@ -229,9 +240,9 @@ test('get conversations supports limit and offset pagination', async () => {
   const anonB = await initIdentity();
   const anonC = await initIdentity();
 
-  await createConversation(owner, anonA);
-  await createConversation(owner, anonB);
-  await createConversation(owner, anonC);
+  await createVisibleConversation(owner, anonA);
+  await createVisibleConversation(owner, anonB);
+  await createVisibleConversation(owner, anonC);
 
   const page1 = await request(app)
     .get('/conversation/mine?limit=2&offset=0')

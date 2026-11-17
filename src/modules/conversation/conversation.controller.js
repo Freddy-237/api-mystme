@@ -1,6 +1,18 @@
 const conversationService = require('./conversation.service');
 const { getIO } = require('../../config/socket');
 const logger = require('../../utils/logger');
+const { conversationForViewer } = require('../../utils/participantMask');
+
+const notifyOwnerIfActive = (conversation) => {
+  if (!conversation?.started_at) return;
+  try {
+    getIO()
+      .to(`user:${conversation.owner_id}`)
+      .emit('new_conversation', conversationForViewer(conversation, conversation.owner_id));
+  } catch (err) {
+    logger.warn({ err }, 'socket emit failed for new_conversation');
+  }
+};
 
 const startConversation = async (req, res, next) => {
   try {
@@ -9,23 +21,10 @@ const startConversation = async (req, res, next) => {
 
     const conversation = await conversationService.startConversation(inviteCode, req.user.id);
 
-    // Notify the link owner about the new conversation so the mobile app
-    // refreshes its list instantly instead of waiting for the next poll.
-    try {
-      const io = getIO();
-      const room = `user:${conversation.owner_id}`;
-      const sockets = await io.in(room).fetchSockets();
-      logger.info({
-        event: 'new_conversation_emit',
-        room,
-        ownerId: conversation.owner_id,
-        conversationId: conversation.id,
-        socketsInRoom: sockets.length,
-      }, 'emitting new_conversation');
-      io.to(room).emit('new_conversation', conversation);
-    } catch (err) {
-      logger.error({ err }, 'socket emit failed for new_conversation');
-    }
+    // The owner is notified on the first message (see message.controller),
+    // not when the link is merely opened. Re-opening an already active
+    // conversation refreshes it on the owner's side.
+    notifyOwnerIfActive(conversation);
 
     res.status(201).json(conversation);
   } catch (error) {
@@ -40,13 +39,7 @@ const resolveLink = async (req, res, next) => {
 
     const result = await conversationService.resolveLink(inviteCode, req.user.id);
 
-    // Notify the link owner about the new conversation (same as startConversation)
-    try {
-      const io = getIO();
-      io.to(`user:${result.ownerId}`).emit('new_conversation', result.conversation);
-    } catch (_) {
-      // Socket not initialized — skip
-    }
+    notifyOwnerIfActive(result.conversation);
 
     res.json(result);
   } catch (error) {

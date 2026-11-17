@@ -21,6 +21,26 @@ const findByCode = async (code) => {
   return result.rows[0];
 };
 
+const findActiveByOwner = async (ownerId) => {
+  const result = await pool.query(
+    'SELECT * FROM links WHERE owner_id = $1 AND is_active = TRUE LIMIT 1',
+    [ownerId],
+  );
+  return result.rows[0];
+};
+
+/** Public view of an invite code: never exposes the owner's internal id. */
+const findPublicByCode = async (code) => {
+  const result = await pool.query(
+    `SELECT l.code, l.is_active, u.pseudo AS owner_pseudo
+       FROM links l
+       JOIN users u ON u.id = l.owner_id
+      WHERE l.code = $1 AND l.is_active = TRUE`,
+    [code],
+  );
+  return result.rows[0];
+};
+
 const findById = async (id) => {
   logger.info({ id }, '[link.repo] findById');
   const result = await pool.query('SELECT * FROM links WHERE id = $1', [id]);
@@ -45,6 +65,8 @@ const deactivateLink = async (id) => {
 module.exports = {
   createLink,
   findByCode,
+  findActiveByOwner,
+  findPublicByCode,
   findById,
   findByOwner,
   deactivateLink,

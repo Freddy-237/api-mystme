@@ -34,8 +34,14 @@ const errorMiddleware = (err, req, res, _next) => {
       ? err.message
       : 'Une erreur est survenue.');
 
+  // Only our own AppError codes are exposed (never pg/driver error codes).
+  const code = statusCode < 500 && err?.name === 'AppError' && typeof err.code === 'string'
+    ? err.code
+    : undefined;
+
   res.status(statusCode).json({
     error: true,
+    ...(code ? { code } : {}),
     message,
     requestId: req.requestId,
   });
