@@ -14,6 +14,14 @@ const getDashboard = async ({ days = 30 } = {}) => {
       SELECT
         (SELECT COUNT(*) FROM users WHERE origin = 'app' AND merged_into_user_id IS NULL)::int AS app_users,
         (SELECT COUNT(*) FROM users WHERE origin = 'web' AND merged_into_user_id IS NULL)::int AS web_users,
+        -- "Engaged": the account sent at least one message. An identity is
+        -- created on every first open of the app or the PWA, so the raw
+        -- account count is inflated by people who never did anything.
+        (SELECT COUNT(*) FROM users u WHERE u.origin = 'app' AND u.merged_into_user_id IS NULL
+            AND EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id))::int AS engaged_app_users,
+        (SELECT COUNT(*) FROM users u WHERE u.origin = 'web' AND u.merged_into_user_id IS NULL
+            AND EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id))::int AS engaged_web_users,
+        (SELECT COUNT(DISTINCT owner_id) FROM links)::int AS users_with_link,
         (SELECT COUNT(*) FROM links WHERE is_active)::int AS active_links,
         (SELECT COUNT(*) FROM conversations WHERE started_at IS NOT NULL)::int AS conversations,
         (SELECT COUNT(*) FROM messages)::int AS messages,
@@ -62,6 +70,9 @@ const getDashboard = async ({ days = 30 } = {}) => {
     totals: {
       appUsers: t.app_users,
       webUsers: t.web_users,
+      engagedAppUsers: t.engaged_app_users,
+      engagedWebUsers: t.engaged_web_users,
+      usersWithLink: t.users_with_link,
       activeLinks: t.active_links,
       conversations: t.conversations,
       messages: t.messages,
