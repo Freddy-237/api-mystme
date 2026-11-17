@@ -6,8 +6,11 @@ const identityRepository = require('./identity.repository');
 const BANNED_ACCOUNT_MESSAGE = 'Compte suspendu';
 
 const assertUserIsActive = (user) => {
+  // The account no longer exists (deleted, purged, or the app was reset):
+  // answer like an expired session, so clients drop it and start afresh.
+  // A 404 here would leave installed apps stuck on a dead session.
   if (!user) {
-    throw new AppError('Utilisateur introuvable', 404);
+    throw new AppError('Session expirée ou invalide', 401, 'AUTH_INVALID');
   }
   if (user.is_banned) {
     throw new AppError(BANNED_ACCOUNT_MESSAGE, 403);

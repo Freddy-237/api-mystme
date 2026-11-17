@@ -82,7 +82,9 @@ test('deleting an account erases it and everything attached', async () => {
   );
 
   // Her token is dead, her link no longer resolves.
-  await request(app).get('/identity/me').set(auth(awa.token)).expect(404);
+  // …answered as an expired session so the app starts afresh.
+  const dead = await request(app).get('/identity/me').set(auth(awa.token)).expect(401);
+  assert.equal(dead.body.code, 'AUTH_INVALID');
   await request(app).get(`/link/code/${awaLink.code}`).expect(404);
 
   // Other people's data is intact.
