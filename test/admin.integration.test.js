@@ -91,12 +91,36 @@ test('full login: 2FA enrolment, forced password change, then access', async () 
 
   const stats = await agent.get('/admin/stats').expect(200);
   assert.equal(typeof stats.body.totals.appUsers, 'number');
+  for (const key of ['engagedAppUsers', 'engagedWebUsers', 'usersWithLink']) {
+    assert.equal(typeof stats.body.totals[key], 'number', key);
+  }
   assert.ok(Array.isArray(stats.body.daily));
 
   // Second login: TOTP is now required, and the secret is not shown again.
   const again = await post(request.agent(app), '/admin/auth/login', { email, password: NEW_PASSWORD }).expect(200);
   assert.equal(again.body.step, 'totp');
   assert.equal(again.body.totpSecret, undefined);
+});
+
+test('engaged users: only accounts that sent a message, never more than all accounts', async () => {
+  const { agent } = await loginAs('support');
+  await initUser(); // opens the app, never writes
+  await reportedConversation(); // both participants write
+
+  const t = (await agent.get('/admin/stats').expect(200)).body.totals;
+  // Other test files run in parallel on the same database, so only check
+  // invariants that hold whatever they do.
+  assert.ok(t.engagedAppUsers >= 2, 'the two writers count');
+  assert.ok(t.engagedAppUsers <= t.appUsers);
+  assert.ok(t.engagedWebUsers <= t.webUsers);
+  assert.ok(t.usersWithLink >= 1);
+
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM users u
+      WHERE u.origin = 'app' AND u.merged_into_user_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.sender_id = u.id)`,
+  );
+  assert.ok(rows[0].n >= 1, 'the idle account exists but is not engaged');
 });
 
 test('state-changing admin requests need the X-Admin-Request header', async () => {
