@@ -69,6 +69,8 @@ test('production env validation rejects missing DB_PASSWORD when DATABASE_URL is
     DB_USER: 'postgres',
     DB_NAME: 'mystme',
     DB_PASSWORD: '',
+    // CI exports DATABASE_URL, which would make DB_PASSWORD optional.
+    DATABASE_URL: '',
   });
 
   assert.notEqual(result.status, 0);

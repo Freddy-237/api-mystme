@@ -71,8 +71,10 @@ test('moderation report accepts a message from the same conversation', async () 
 
   assert.equal(reportRes.body.conversation_id, conversationId);
   assert.equal(reportRes.body.message_id, messageRes.body.id);
-  assert.equal(reportRes.body.unique_reporter_count, 1);
-  assert.equal(reportRes.body.auto_flagged, false);
+  assert.equal(reportRes.body.already_reported, false);
+  // The reporter gets an acknowledgement only: nothing about the reported user.
+  assert.equal(reportRes.body.reported_user_id, undefined);
+  assert.ok(!JSON.stringify(reportRes.body).includes(anon.user.id));
 });
 
 test('moderation report deduplicates repeated reports from the same reporter', async () => {
