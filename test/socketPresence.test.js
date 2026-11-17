@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { __private } = require('../src/config/socket');
 
-test('getPresenceAudienceUserIds returns unique peer ids only', () => {
+test('getPresenceAudienceUserIds only targets anonymous correspondents of the owner', () => {
   const audience = __private.getPresenceAudienceUserIds(
     [
       { owner_id: 'user-a', anonymous_id: 'user-b' },
@@ -13,10 +13,11 @@ test('getPresenceAudienceUserIds returns unique peer ids only', () => {
     'user-a',
   );
 
-  assert.deepEqual(audience.sort(), ['user-b', 'user-c']);
+  // user-c owns a link user-a writes on anonymously: user-c must NOT see user-a online.
+  assert.deepEqual(audience, ['user-b']);
 });
 
-test('emitPresenceToPeers emits only to shared conversation peers', async () => {
+test('emitPresenceToPeers shows the owner online to anonymous peers, never the reverse', async () => {
   const emitted = [];
   const emitter = {
     to(room) {
@@ -29,7 +30,7 @@ test('emitPresenceToPeers emits only to shared conversation peers', async () => 
   };
 
   const repository = {
-    async findByParticipantWithUnread(userId) {
+    async findOwnedConversationPeers(userId) {
       assert.equal(userId, 'user-a');
       return [
         { owner_id: 'user-a', anonymous_id: 'user-b' },
@@ -44,11 +45,6 @@ test('emitPresenceToPeers emits only to shared conversation peers', async () => 
   assert.deepEqual(emitted, [
     {
       room: 'user:user-b',
-      event: 'user_online',
-      payload: { userId: 'user-a' },
-    },
-    {
-      room: 'user:user-c',
       event: 'user_online',
       payload: { userId: 'user-a' },
     },
@@ -67,7 +63,7 @@ test('emitPresenceToPeers fails closed without throwing', async () => {
   };
 
   const repository = {
-    async findByParticipantWithUnread() {
+    async findOwnedConversationPeers() {
       throw new Error('db unavailable');
     },
   };

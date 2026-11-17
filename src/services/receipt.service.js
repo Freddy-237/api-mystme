@@ -153,10 +153,11 @@ const verifyGoogleReceipt = async (purchaseToken, productId, isSubscription = tr
     const expiresAt = Number.isFinite(expiryMillis) && expiryMillis > 0
       ? new Date(expiryMillis)
       : null;
-    const cancelled = result.cancelReason != null;
+    // cancelReason only means auto-renew is off: access runs until expiry
+    // (on refund/revoke Google moves the expiry into the past).
     const pendingPayment = result.paymentState != null &&
       ![1, 2].includes(Number(result.paymentState));
-    const valid = !cancelled && !pendingPayment && expiresAt && expiresAt.getTime() > Date.now();
+    const valid = !pendingPayment && expiresAt && expiresAt.getTime() > Date.now();
     return { valid: !!valid, expiresAt: valid ? expiresAt : null, productId };
   }
 

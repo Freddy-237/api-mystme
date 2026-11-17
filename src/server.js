@@ -6,6 +6,7 @@ const pool = require('./config/database');
 const logger = require('./utils/logger');
 const env = require('./config/env');
 const runMigration = require('./database/runMigration');
+const webPurgeJob = require('./jobs/webPurge.job');
 
 const server = http.createServer(app);
 
@@ -29,6 +30,7 @@ runMigration({ closePool: false })
     logger.info('Connected to PostgreSQL');
     server.listen(env.port, () => {
       logger.info(`Server running on port ${env.port}`);
+      webPurgeJob.start();
     });
   })
   .catch((err) => {
@@ -38,6 +40,7 @@ runMigration({ closePool: false })
 
 const shutdown = async (signal) => {
   logger.info({ signal }, 'Received shutdown signal');
+  webPurgeJob.stop();
   server.close(async () => {
     try {
       await pool.end();

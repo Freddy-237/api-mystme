@@ -12,6 +12,10 @@ const assertUserIsActive = (user) => {
   if (user.is_banned) {
     throw new AppError(BANNED_ACCOUNT_MESSAGE, 403);
   }
+  // A web identity transferred into the app: its old sessions are dead.
+  if (user.merged_into_user_id) {
+    throw new AppError('Cette session a été transférée vers l\'app MystMe', 401, 'IDENTITY_TRANSFERRED');
+  }
   return user;
 };
 
@@ -30,6 +34,10 @@ const authenticateToken = async (token) => {
   }
 
   const user = await requireActiveUserById(decoded.userId);
+  // Tokens issued before a logout carry an older session version.
+  if ((Number(decoded.sv) || 0) !== (Number(user.session_version) || 0)) {
+    throw new AppError('Session expirée ou invalide', 401, 'AUTH_INVALID');
+  }
   return {
     id: user.id,
     isBanned: !!user.is_banned,

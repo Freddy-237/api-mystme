@@ -1,6 +1,8 @@
 const identityService = require('./identity.service');
 const env = require('../../config/env');
 const { randomUUID } = require('crypto');
+const logger = require('../../utils/logger');
+const { deleteMedia } = require('../../services/upload.service');
 
 const buildCookieOptions = (httpOnly) => ({
   httpOnly,
@@ -13,7 +15,10 @@ const buildCookieOptions = (httpOnly) => ({
 
 const initIdentity = async (req, res, next) => {
   try {
-    const data = await identityService.initIdentity();
+    // The PWA sends { client: 'web' }. Absent/other → app identity, which keeps
+    // already-published mobile builds (they send {}) working unchanged.
+    const origin = req.body?.client === 'web' ? 'web' : 'app';
+    const data = await identityService.initIdentity({ origin });
     const csrfToken = randomUUID();
 
     res.cookie(env.authCookieName, data.token, buildCookieOptions(true));
@@ -98,8 +103,11 @@ const updatePushToken = async (req, res, next) => {
   }
 };
 
-const logout = async (_req, res, next) => {
+const logout = async (req, res, next) => {
   try {
+    // Clearing the cookie alone is not a logout: the JWT would stay valid for
+    // 30 days. Revoke it server-side.
+    await identityService.logout(req.user.id);
     res.clearCookie(env.authCookieName, {
       ...buildCookieOptions(true),
       maxAge: undefined,
@@ -109,6 +117,41 @@ const logout = async (_req, res, next) => {
       maxAge: undefined,
     });
     res.status(200).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteAccount = async (req, res, next) => {
+  try {
+    const result = await identityService.deleteAccount(req.user.id);
+
+    // Real time: the other participants drop the conversations, and every
+    // device of the deleted account is disconnected.
+    try {
+      const { getIO } = require('../../config/socket');
+      const io = getIO();
+      for (const peer of result.peers) {
+        io.to(`user:${peer.userId}`).emit('conversation_deleted', {
+          conversationId: peer.conversationId,
+        });
+      }
+      for (const userId of result.userIds) {
+        io.in(`user:${userId}`).disconnectSockets(true);
+      }
+    } catch (err) {
+      logger.warn({ err }, 'account deletion: realtime cleanup skipped');
+    }
+
+    // Files are removed after the response: a slow Cloudinary must not make
+    // the deletion look like it failed (the database part is already done).
+    void deleteMedia(result.media).then((deleted) => {
+      logger.info({ deleted, total: result.media.length }, 'account deletion: media removed');
+    });
+
+    res.clearCookie(env.authCookieName, { ...buildCookieOptions(true), maxAge: undefined });
+    res.clearCookie(env.csrfCookieName, { ...buildCookieOptions(false), maxAge: undefined });
+    res.status(200).json({ ok: true, deletedConversations: result.conversationIds.length });
   } catch (error) {
     next(error);
   }
@@ -210,6 +253,7 @@ module.exports = {
   updateNotificationPreference,
   updatePushToken,
   logout,
+  deleteAccount,
   refreshCsrf,
   issueSessionToken,
   createRecoveryKey,

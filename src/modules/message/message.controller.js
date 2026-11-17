@@ -2,8 +2,12 @@ const messageService = require('./message.service');
 const { getIO } = require('../../config/socket');
 const logger = require('../../utils/logger');
 const conversationRepository = require('../conversation/conversation.repository');
-const identityRepository = require('../identity/identity.repository');
 const { sendPushToUser } = require('../../services/push.service');
+const {
+  conversationForViewer,
+  messageForViewer,
+  emitToParticipants,
+} = require('../../utils/participantMask');
 const {
   uploadVideo: uploadToCloudinaryVideo,
   uploadImage: uploadToCloudinaryImage,
@@ -17,14 +21,24 @@ const resolveRecipientId = async (conversationId, senderId) => {
   return conv.owner_id === senderId ? conv.anonymous_id : conv.owner_id;
 };
 
+// Each participant gets the payload they are allowed to see: the link owner
+// never receives the anonymous participant's real id (utils/participantMask).
 const emitNewConversationIfNeeded = async (conversation) => {
   try {
     if (conversation) {
-      const io = getIO();
-      io.to(`user:${conversation.owner_id}`).emit('new_conversation', conversation);
-      io.to(`user:${conversation.anonymous_id}`).emit('new_conversation', conversation);
+      emitToParticipants(getIO(), conversation, 'new_conversation', (viewerId) =>
+        conversationForViewer(conversation, viewerId));
     }
   } catch (_) {}
+};
+
+const emitNewMessage = (conversation, message) => {
+  try {
+    emitToParticipants(getIO(), conversation, 'new_message', (viewerId) =>
+      messageForViewer(message, conversation, viewerId));
+  } catch (_) {
+    // Socket not initialized — skip
+  }
 };
 
 const notifyRecipient = async ({ conversationId, senderId, preview }) => {
@@ -35,8 +49,11 @@ const notifyRecipient = async ({ conversationId, senderId, preview }) => {
     const recipientId = conv.owner_id === senderId ? conv.anonymous_id : conv.owner_id;
     if (!recipientId) return;
 
-    const sender = await identityRepository.findById(senderId);
-    const senderName = sender?.pseudo || 'Anonyme';
+    // Never the sender's global pseudo: an anonymous sender is announced under
+    // the alias of THIS conversation, otherwise the push would unmask them.
+    const senderName = senderId === conv.anonymous_id
+      ? (conv.anonymous_alias || 'Anonyme')
+      : (conv.owner_pseudo || 'Anonyme');
 
     await sendPushToUser({
       userId: recipientId,
@@ -57,7 +74,7 @@ const sendMessage = async (req, res, next) => {
       return res.status(400).json({ message: 'conversationId et content requis' });
     }
 
-    const { message, activatedConversation } = await messageService.sendMessageWithConversationState(
+    const { message, activatedConversation, conversation } = await messageService.sendMessageWithConversationState(
       conversationId,
       req.user.id,
       content,
@@ -65,18 +82,7 @@ const sendMessage = async (req, res, next) => {
     );
 
     await emitNewConversationIfNeeded(activatedConversation);
-
-    // Emit to the conversation room via Socket.io
-    try {
-      const io = getIO();
-      io.to(conversationId).emit('new_message', message);
-      const recipientId = await resolveRecipientId(conversationId, req.user.id);
-      if (recipientId) {
-        io.to(`user:${recipientId}`).emit('new_message', message);
-      }
-    } catch (_) {
-      // Socket not initialized — skip
-    }
+    emitNewMessage(conversation, message);
 
     await notifyRecipient({
       conversationId,
@@ -84,7 +90,7 @@ const sendMessage = async (req, res, next) => {
       preview: content.length > 80 ? `${content.slice(0, 80)}…` : content,
     });
 
-    res.status(201).json(message);
+    res.status(201).json(messageForViewer(message, conversation, req.user.id));
   } catch (error) {
     next(error);
   }
@@ -215,6 +221,10 @@ const createMediaHandler = (mediaType) => {
         return res.status(400).json({ message: `conversationId et ${fieldLabel} requis` });
       }
 
+      // Authorize BEFORE uploading: otherwise anyone could push files to our
+      // Cloudinary account for conversations they are not part of.
+      await messageService.assertConversationWritable(conversationId, req.user.id);
+
       let mediaUrl;
       try {
         mediaUrl = await uploadFn(file.buffer, conversationId);
@@ -224,9 +234,9 @@ const createMediaHandler = (mediaType) => {
         );
       } catch (uploadErr) {
         logger.error({ err: uploadErr, mediaType, conversationId }, 'Cloudinary upload failed');
-        return res.status(502).json({ message: `Upload ${fieldLabel} échoué`, detail: uploadErr.message });
+        return res.status(502).json({ message: `Upload ${fieldLabel} échoué` });
       }
-      const { message, activatedConversation } = await messageService.createMediaMessageWithConversationState(
+      const { message, activatedConversation, conversation } = await messageService.createMediaMessageWithConversationState(
         conversationId,
         req.user.id,
         mediaUrl,
@@ -250,14 +260,7 @@ const createMediaHandler = (mediaType) => {
         'messageController.createMediaHandler:conversation-activated',
       );
 
-      try {
-        const io = getIO();
-        io.to(conversationId).emit('new_message', message);
-        const recipientId = await resolveRecipientId(conversationId, req.user.id);
-        if (recipientId) {
-          io.to(`user:${recipientId}`).emit('new_message', message);
-        }
-      } catch (_) {}
+      emitNewMessage(conversation, message);
 
       await notifyRecipient({ conversationId, senderId: req.user.id, preview });
       logger.info(
@@ -265,7 +268,7 @@ const createMediaHandler = (mediaType) => {
         'messageController.createMediaHandler:done',
       );
 
-      res.status(201).json(message);
+      res.status(201).json(messageForViewer(message, conversation, req.user.id));
     } catch (error) {
       logger.error(
         {

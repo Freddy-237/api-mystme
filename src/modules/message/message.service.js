@@ -1,12 +1,15 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const messageRepository = require('./message.repository');
 const conversationRepository = require('../conversation/conversation.repository');
+const identityRepository = require('../identity/identity.repository');
 const {
-  isConversationExpired,
-} = require('../conversation/conversation.expiry');
-const subscriptionService = require('../subscription/subscription.service');
+  ORIGINS,
+  WEB_MESSAGE_LIMIT,
+  isWebLocked,
+} = require('../../config/webTrial');
 const AppError = require('../../utils/AppError');
 const logger = require('../../utils/logger');
+const { messageForViewer } = require('../../utils/participantMask');
 
 const persistMessageWithConversationState = async ({
   conversationId,
@@ -16,7 +19,7 @@ const persistMessageWithConversationState = async ({
   mediaUrl,
   mediaType,
 }) => {
-  await assertConversationWritable(conversationId, senderId);
+  const conversation = await assertConversationWritable(conversationId, senderId);
 
   if (replyToMessageId) {
     const target = await messageRepository.findById(replyToMessageId);
@@ -25,7 +28,7 @@ const persistMessageWithConversationState = async ({
     }
   }
 
-  return messageRepository.createMessageWithConversationState({
+  const result = await messageRepository.createMessageWithConversationState({
     id: uuidv4(),
     conversation_id: conversationId,
     sender_id: senderId,
@@ -34,6 +37,9 @@ const persistMessageWithConversationState = async ({
     media_type: mediaType,
     reply_to_message_id: replyToMessageId,
   });
+  // `message` holds REAL participant ids: callers must pass it through
+  // messageForViewer() (see utils/participantMask) before sending it to a client.
+  return { ...result, conversation };
 };
 
 const assertConversationParticipant = async (conversationId, userId) => {
@@ -69,20 +75,29 @@ const assertConversationWritable = async (conversationId, senderId) => {
     'assertConversationWritable:check',
   );
   if (conv.status === 'blocked') {
-    throw new AppError('Conversation bloquée', 403);
+    throw new AppError('Conversation bloquée', 403, 'CONVERSATION_BLOCKED');
   }
 
-  if (conv.started_at != null) {
-    if (isConversationExpired(conv.started_at)) {
-      // Premium users or single-unlock buyers can bypass expiry.
-      const unlocked = await subscriptionService.isConversationUnlocked(senderId, conversationId);
-      logger.info(
-        { conversationId, senderId, unlocked },
-        'assertConversationWritable:expired-check',
+  // Conversations never expire. Only web (PWA) identities are restricted:
+  // read-only after their 7-day window, and capped in messages per
+  // conversation — both enforced here so no client can bypass them.
+  const sender = await identityRepository.findAccessStateById(senderId);
+  if (sender?.origin === ORIGINS.WEB) {
+    if (isWebLocked(sender)) {
+      throw new AppError(
+        'Ta période web est terminée. Télécharge l\'app pour continuer la conversation.',
+        403,
+        'WEB_TRIAL_EXPIRED',
       );
-      if (!unlocked) {
-        throw new AppError('Conversation expirée', 403);
-      }
+    }
+
+    const sentCount = await messageRepository.countBySenderInConversation(conversationId, senderId);
+    if (sentCount >= WEB_MESSAGE_LIMIT) {
+      throw new AppError(
+        'Limite de messages web atteinte. Télécharge l\'app pour continuer.',
+        403,
+        'WEB_MESSAGE_LIMIT',
+      );
     }
   }
 
@@ -92,7 +107,7 @@ const assertConversationWritable = async (conversationId, senderId) => {
 
 const createMediaMessage = async (conversationId, senderId, mediaUrl, mediaType, content) => {
   logger.info(
-    { conversationId, senderId, mediaType, mediaUrl, content },
+    { conversationId, senderId, mediaType },
     'createMediaMessage:start',
   );
   const result = await persistMessageWithConversationState({
@@ -123,7 +138,7 @@ const createMediaMessageWithConversationState = async (
   content,
 ) => {
   logger.info(
-    { conversationId, senderId, mediaType, mediaUrl, content },
+    { conversationId, senderId, mediaType },
     'createMediaMessageWithConversationState:start',
   );
   const result = await persistMessageWithConversationState({
@@ -166,9 +181,10 @@ const sendMessageWithConversationState = async (conversationId, senderId, conten
 };
 
 const getMessages = async (conversationId, userId, limit, offset) => {
-  await assertConversationParticipant(conversationId, userId);
+  const conv = await assertConversationParticipant(conversationId, userId);
 
-  return messageRepository.findByConversation(conversationId, userId, limit, offset);
+  const rows = await messageRepository.findByConversation(conversationId, userId, limit, offset);
+  return rows.map((row) => messageForViewer(row, conv, userId));
 };
 
 const hideMessageForMe = async (messageId, userId) => {
@@ -196,7 +212,8 @@ const deleteMessage = async (messageId, userId) => {
     throw new AppError('Non autorisé — seul l\'auteur peut supprimer', 403);
   }
   const deleted = await messageRepository.softDelete(messageId);
-  return deleted;
+  const conv = await conversationRepository.findById(deleted.conversation_id);
+  return messageForViewer(deleted, conv, userId);
 };
 
 const sendVideoMessage = async (conversationId, senderId, mediaUrl) => {
@@ -216,13 +233,15 @@ const sendAudioMessage = async (conversationId, senderId, mediaUrl) => {
 };
 
 const searchMessages = async (conversationId, userId, searchTerm, limit, offset) => {
-  await assertConversationParticipant(conversationId, userId);
-  return messageRepository.searchByConversation(conversationId, userId, searchTerm, limit, offset);
+  const conv = await assertConversationParticipant(conversationId, userId);
+  const rows = await messageRepository.searchByConversation(conversationId, userId, searchTerm, limit, offset);
+  return rows.map((row) => messageForViewer(row, conv, userId));
 };
 
 const getMedia = async (conversationId, userId, mediaType, limit, offset) => {
-  await assertConversationParticipant(conversationId, userId);
-  return messageRepository.findMediaByConversation(conversationId, userId, mediaType, limit, offset);
+  const conv = await assertConversationParticipant(conversationId, userId);
+  const rows = await messageRepository.findMediaByConversation(conversationId, userId, mediaType, limit, offset);
+  return rows.map((row) => messageForViewer(row, conv, userId));
 };
 
 module.exports = {

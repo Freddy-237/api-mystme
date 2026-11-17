@@ -94,6 +94,21 @@ const markRead = async (conversationId, recipientId) => {
   );
 };
 
+/**
+ * Messages a user ever sent in a conversation (deleted ones included, so
+ * deleting messages cannot be used to get around the web message limit).
+ */
+const countBySenderInConversation = async (conversationId, senderId, queryable = pool) => {
+  const result = await execute(
+    queryable,
+    `SELECT COUNT(*)::int AS count
+       FROM messages
+      WHERE conversation_id = $1 AND sender_id = $2`,
+    [conversationId, senderId],
+  );
+  return Number(result.rows[0]?.count || 0);
+};
+
 const hideMessageForUser = async (messageId, userId) => {
   await pool.query(
     `INSERT INTO hidden_messages (user_id, message_id)
@@ -167,6 +182,7 @@ module.exports = {
   findById,
   softDelete,
   markRead,
+  countBySenderInConversation,
   hideMessageForUser,
   unhideMessageForUser,
   searchByConversation,

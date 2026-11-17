@@ -98,7 +98,10 @@ test('moderation report deduplicates repeated reports from the same reporter', a
 
   assert.equal(secondRes.body.id, firstRes.body.id);
   assert.equal(secondRes.body.already_reported, true);
-  assert.equal(secondRes.body.unique_reporter_count, 1);
+  // The reporter only gets an acknowledgement: no ids, pseudos or counts.
+  assert.equal(secondRes.body.unique_reporter_count, undefined);
+  assert.equal(secondRes.body.reported_user_id, undefined);
+  assert.equal(secondRes.body.anonymous_id, undefined);
 });
 
 test('moderation report auto-flags after threshold of unique reporters', async () => {
@@ -135,10 +138,7 @@ test('moderation report auto-flags after threshold of unique reporters', async (
     owner3,
   ).expect(201);
 
-  assert.equal(thirdRes.body.reported_user_id, targetAnon.user.id);
-  assert.equal(thirdRes.body.unique_reporter_count, 3);
-  assert.equal(thirdRes.body.auto_flag_threshold, 3);
-  assert.equal(thirdRes.body.auto_flagged, true);
+  assert.equal(thirdRes.body.reported_user_id, undefined);
 
   const pendingRes = await withModerationAuth(
     request(app).get('/moderation/reports').query({ status: 'pending' }),
@@ -147,6 +147,8 @@ test('moderation report auto-flags after threshold of unique reporters', async (
   const flaggedReport = pendingRes.body.find((report) => report.id === thirdRes.body.id);
   assert.equal(flaggedReport.auto_flagged, true);
   assert.equal(flaggedReport.unique_reporter_count, 3);
+  assert.equal(flaggedReport.reported_user_id, targetAnon.user.id);
+  assert.equal(flaggedReport.auto_flag_threshold, 3);
 
   const meRes = await authed(
     request(app).get('/identity/me'),

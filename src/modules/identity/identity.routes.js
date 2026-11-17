@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const identityController = require('./identity.controller');
+const transferController = require('../transfer/transfer.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
 const createRateLimit = require('../../middlewares/rateLimit.middleware');
 const validate = require('../../middlewares/validate.middleware');
@@ -23,6 +24,15 @@ const otpVerifyLimiter = createRateLimit('http:identity:otp-verify', {
   windowMs: 15 * 60 * 1000, // 15 minutes
 	maxRequests: 10,
 	message: 'Trop de tentatives de vérification, réessaie dans 15 minutes.',
+});
+
+// Per-email limiter: IP limits alone are weak (IP rotation), so also cap how
+// many codes can be requested for one email address.
+const otpPerEmailLimiter = createRateLimit('http:identity:otp-email', {
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 3,
+	keyGenerator: (req) => String(req.body?.email || '').trim().toLowerCase() || req.ip,
+	message: 'Trop de codes demandés pour cet email, réessaie dans 15 minutes.',
 });
 
 // POST /identity/init — create anonymous user
@@ -97,6 +107,7 @@ router.patch(
 router.post(
 	'/email/restore/request-otp',
 	otpRequestLimiter,
+	otpPerEmailLimiter,
 	body('email').isEmail().withMessage('email invalide'),
 	validate,
 	identityController.requestEmailRestore,
@@ -111,6 +122,51 @@ router.post(
 	validate,
 	identityController.verifyEmailRestore,
 );
+
+// ── PWA → app transfer ───────────────────────────────────────────────────────
+const transferCreateLimiter = createRateLimit('http:identity:transfer-create', {
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 10,
+	message: 'Trop de codes demandés, réessaie dans 15 minutes.',
+});
+const transferClaimIpLimiter = createRateLimit('http:identity:transfer-claim-ip', {
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 15,
+	message: 'Trop de tentatives, réessaie dans 15 minutes.',
+});
+const transferClaimUserLimiter = createRateLimit('http:identity:transfer-claim-user', {
+	windowMs: 15 * 60 * 1000,
+	maxRequests: 10,
+	keyGenerator: (req) => req.user?.id || req.ip,
+	message: 'Trop de tentatives, réessaie dans 15 minutes.',
+});
+
+// POST /identity/transfer-token — (web identity) get a one-time transfer code
+router.post(
+	'/transfer-token',
+	transferCreateLimiter,
+	authMiddleware,
+	transferController.createTransferCode,
+);
+
+// POST /identity/transfer/claim — (app identity) absorb a web identity
+router.post(
+	'/transfer/claim',
+	transferClaimIpLimiter,
+	authMiddleware,
+	transferClaimUserLimiter,
+	body('code').isString().trim().isLength({ min: 8, max: 32 }).withMessage('code de transfert invalide'),
+	validate,
+	transferController.claimTransferCode,
+);
+
+// DELETE /identity/me — permanently delete the account and all its data
+const deleteAccountLimiter = createRateLimit('http:identity:delete', {
+	windowMs: 60 * 60 * 1000,
+	maxRequests: 5,
+	message: 'Trop de tentatives, réessaie plus tard.',
+});
+router.delete('/me', deleteAccountLimiter, authMiddleware, identityController.deleteAccount);
 
 // GET /identity/csrf — refresh CSRF token cookie for current session
 router.get('/csrf', authMiddleware, identityController.refreshCsrf);

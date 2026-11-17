@@ -3,35 +3,52 @@ const crypto = require('crypto');
 const linkRepository = require('./link.repository');
 const AppError = require('../../utils/AppError');
 const logger = require('../../utils/logger');
+const identityRepository = require('../identity/identity.repository');
+const { ORIGINS } = require('../../config/webTrial');
+
+const withShareUrl = (link) => ({ ...link, shareUrl: `/c/${link.code}` });
 
 /** Generate a short 8-char invite code */
 const generateCode = () => {
   return crypto.randomBytes(4).toString('hex'); // 8 hex chars
 };
 
+/**
+ * Get-or-create: a user has exactly ONE active link (enforced by the
+ * ux_links_one_active_per_owner index). Calling this twice — or twice at the
+ * same time — returns the same link instead of creating a new one.
+ * @returns {{ link: object, created: boolean }}
+ */
 const createLink = async (ownerId) => {
-  const code = generateCode();
-  logger.info({ ownerId }, '[link.service] createLink');
-  const link = await linkRepository.createLink({
-    id: uuidv4(),
-    code,
-    owner_id: ownerId,
-  });
-  logger.info({ ownerId, linkId: link.id }, '[link.service] createLink OK');
-  return {
-    ...link,
-    shareUrl: `/c/${link.code}`,
-  };
+  const owner = await identityRepository.findAccessStateById(ownerId);
+  if (owner?.origin === ORIGINS.WEB) {
+    throw new AppError('Télécharge l\'app pour créer ton propre lien', 403, 'APP_REQUIRED');
+  }
+
+  const existing = await linkRepository.findActiveByOwner(ownerId);
+  if (existing) return { link: withShareUrl(existing), created: false };
+
+  try {
+    const link = await linkRepository.createLink({
+      id: uuidv4(),
+      code: generateCode(),
+      owner_id: ownerId,
+    });
+    logger.info({ ownerId, linkId: link.id }, '[link.service] createLink OK');
+    return { link: withShareUrl(link), created: true };
+  } catch (error) {
+    // Concurrent request created it first (unique partial index).
+    if (error?.code === '23505') {
+      const winner = await linkRepository.findActiveByOwner(ownerId);
+      if (winner) return { link: withShareUrl(winner), created: false };
+    }
+    throw error;
+  }
 };
 
 const getLinkByCode = async (code) => {
-  logger.info('[link.service] getLinkByCode');
-  const link = await linkRepository.findByCode(code);
-  if (!link) {
-    logger.warn('[link.service] getLinkByCode — not found');
-    throw new AppError('Lien introuvable ou inactif', 404);
-  }
-  logger.info({ linkId: link.id, ownerId: link.owner_id, isActive: link.is_active }, '[link.service] getLinkByCode OK');
+  const link = await linkRepository.findPublicByCode(code);
+  if (!link) throw new AppError('Lien introuvable ou inactif', 404);
   return link;
 };
 

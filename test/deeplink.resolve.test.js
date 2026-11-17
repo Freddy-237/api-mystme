@@ -35,7 +35,9 @@ test('resolve-link creates or reuses conversation and returns deep-link context'
   assert.equal(firstResolve.body?.targetPseudo, ownerPseudo);
   assert.equal(firstResolve.body?.conversation?.id, firstResolve.body?.conversationId);
   assert.equal(firstResolve.body?.conversation?.owner_pseudo, ownerPseudo);
-  assert.equal(typeof firstResolve.body?.conversation?.expires_at, 'string');
+  // Opening a link does not start the conversation: the first message does.
+  assert.equal(firstResolve.body?.conversation?.started_at, null);
+  assert.equal(firstResolve.body?.conversation?.expires_at, undefined);
 
   const secondResolve = await request(app)
     .post('/conversation/resolve-link')

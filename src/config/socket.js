@@ -8,6 +8,13 @@ const distributedRateLimitStore = require('../utils/distributedRateLimitStore');
 const conversationRepository = require('../modules/conversation/conversation.repository');
 const { authenticateToken } = require('../modules/identity/identity.auth');
 const AppError = require('../utils/AppError');
+const { isAllowedSocketMedia } = require('../utils/mediaPolicy');
+const {
+  broadcastUserId,
+  conversationForViewer,
+  messageForViewer,
+  emitToParticipants,
+} = require('../utils/participantMask');
 
 let io;
 
@@ -60,13 +67,17 @@ const rejectSocketAck = (ack, {
 /** Set of currently connected user IDs (in-memory). */
 const onlineUsers = new Set();
 
+/**
+ * Presence is one-way. A link owner is public, so their anonymous
+ * correspondents may see them online. The reverse is never broadcast: seeing
+ * when an anonymous sender is online lets the owner guess who they are.
+ */
 const getPresenceAudienceUserIds = (conversations, userId) => {
   const audience = new Set();
 
   for (const conversation of conversations || []) {
-    const peerId = conversation.owner_id === userId
-      ? conversation.anonymous_id
-      : conversation.owner_id;
+    if (conversation.owner_id !== userId) continue;
+    const peerId = conversation.anonymous_id;
     if (peerId && peerId !== userId) {
       audience.add(peerId);
     }
@@ -82,7 +93,7 @@ const emitPresenceToPeers = async (
   repository = conversationRepository,
 ) => {
   try {
-    const conversations = await repository.findByParticipantWithUnread(userId);
+    const conversations = await repository.findOwnedConversationPeers(userId);
     const audienceUserIds = getPresenceAudienceUserIds(conversations, userId);
 
     for (const peerId of audienceUserIds) {
@@ -139,6 +150,15 @@ const ensureConversationAccess = async (socket, payload, eventName) => {
   return conversationId;
 };
 
+/**
+ * Id under which `userId` is announced to the other participant (typing,
+ * read receipts): the anonymous side only ever appears under its masked id.
+ */
+const resolveBroadcastUserId = async (conversationId, userId) => {
+  const participants = await conversationRepository.findParticipants(conversationId);
+  return broadcastUserId(participants, userId);
+};
+
 const normalizeSocketMediaPayload = (data) => {
   const payload = data && typeof data === 'object' ? data : {};
   const conversationId = typeof payload.conversationId === 'string'
@@ -161,6 +181,10 @@ const normalizeSocketMediaPayload = (data) => {
 
   if (!ALLOWED_SOCKET_MEDIA_TYPES.has(mediaType)) {
     throw new AppError('Type de media invalide', 400);
+  }
+
+  if (!isAllowedSocketMedia(mediaType, filename)) {
+    throw new AppError('Type de fichier non autorisé', 400);
   }
 
   let buffer;
@@ -240,7 +264,7 @@ const initSocket = (httpServer) => {
   const typingStartG = socketRateLimit('typing_start', { windowMs: 2_000, max: 5 }, distributedRateLimitStore);
   const typingStopG = socketRateLimit('typing_stop', { windowMs: 2_000, max: 5 }, distributedRateLimitStore);
   const readGuard = socketRateLimit('messages_read', { windowMs: 5_000, max: 10 }, distributedRateLimitStore);
-  const sendMediaG = socketRateLimit('send_media', { windowMs: 30_000, max: 10 }, distributedRateLimitStore);
+  const sendMediaG = socketRateLimit('send_media', { windowMs: 60_000, max: 6 }, distributedRateLimitStore);
 
   io.on('connection', (socket) => {
     const uid = socket.user?.userId ?? socket.id;
@@ -292,7 +316,8 @@ const initSocket = (httpServer) => {
       const conversationId = await ensureConversationAccess(socket, payload, 'typing_start');
       if (!conversationId) return;
       socket.join(conversationId);
-      socket.to(conversationId).emit('typing_start', { userId: uid, conversationId });
+      const visibleId = await resolveBroadcastUserId(conversationId, uid);
+      socket.to(conversationId).emit('typing_start', { userId: visibleId, conversationId });
     });
 
     socket.on('typing_stop', async (payload) => {
@@ -300,7 +325,8 @@ const initSocket = (httpServer) => {
       const conversationId = await ensureConversationAccess(socket, payload, 'typing_stop');
       if (!conversationId) return;
       socket.join(conversationId);
-      socket.to(conversationId).emit('typing_stop', { userId: uid, conversationId });
+      const visibleId = await resolveBroadcastUserId(conversationId, uid);
+      socket.to(conversationId).emit('typing_stop', { userId: visibleId, conversationId });
     });
 
     // Mark messages read — broadcast to other participant
@@ -309,7 +335,8 @@ const initSocket = (httpServer) => {
       const conversationId = await ensureConversationAccess(socket, payload, 'messages_read');
       if (!conversationId) return;
       socket.join(conversationId);
-      socket.to(conversationId).emit('messages_read', { userId: uid, conversationId });
+      const visibleId = await resolveBroadcastUserId(conversationId, uid);
+      socket.to(conversationId).emit('messages_read', { userId: visibleId, conversationId });
     });
 
     // ── Media upload via socket ──────────────────────────────────────────────
@@ -377,9 +404,13 @@ const initSocket = (httpServer) => {
         );
         logger.info({ userId, conversationId: authorizedConversationId, messageId: message?.id }, 'send_media:saved');
 
+        // Each participant gets the payload they may see (the owner never
+        // receives the anonymous participant's real id).
+        const participants = await conversationRepository.findParticipants(authorizedConversationId);
+
         if (activatedConversation) {
-          io.to(`user:${activatedConversation.owner_id}`).emit('new_conversation', activatedConversation);
-          io.to(`user:${activatedConversation.anonymous_id}`).emit('new_conversation', activatedConversation);
+          emitToParticipants(io, activatedConversation, 'new_conversation', (viewerId) =>
+            conversationForViewer(activatedConversation, viewerId));
         }
 
         // Broadcast to all room participants
@@ -395,24 +426,31 @@ const initSocket = (httpServer) => {
           is_read:          false,
         };
         socket.join(authorizedConversationId);
-        io.to(authorizedConversationId).emit('new_message', msgObj);
+        emitToParticipants(io, participants, 'new_message', (viewerId) =>
+          messageForViewer(msgObj, participants, viewerId));
 
-        if (typeof ack === 'function') ack({ ok: true, message: msgObj });
+        if (typeof ack === 'function') {
+          ack({ ok: true, message: messageForViewer(msgObj, participants, userId) });
+        }
       } catch (err) {
         logger.error({ err, userId, conversationId, mediaType }, 'send_media:error');
         const message = err?.statusCode >= 500
           ? 'Le service est temporairement indisponible. Réessaie plus tard.'
           : (err.message || 'Envoi du média impossible');
+        // Business codes (WEB_TRIAL_EXPIRED, WEB_MESSAGE_LIMIT…) reach the client.
+        const businessCode = err?.name === 'AppError' && err?.statusCode < 500 && typeof err.code === 'string'
+          ? err.code
+          : null;
         if (typeof ack === 'function') {
           rejectSocketAck(ack, {
             message,
             event: 'send_media',
-            code: err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED',
+            code: businessCode || (err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED'),
           });
         } else {
           socket.emit('media_error', {
             error: true,
-            code: err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED',
+            code: businessCode || (err?.statusCode >= 500 ? 'SERVER_ERROR' : 'SEND_MEDIA_FAILED'),
             message,
             conversationId,
             requestId: socket.id,
@@ -447,20 +485,18 @@ const initSocket = (httpServer) => {
         allowed = await conversationRepository.hasSharedConversation(userId, targetUserId);
       }
 
-      if (!allowed) {
-        logger.warn({ userId, targetUserId }, 'socket presence access denied');
-        emitSocketError(socket, {
-          message: 'Non autorisé',
-          event: 'check_presence',
-          code: 'FORBIDDEN',
-        });
-        return;
-      }
+      // Unknown ids (including the masked id an owner holds for an anonymous
+      // correspondent) simply read as offline: nothing to learn from them.
+      // An owner may never read the presence of someone writing to them
+      // anonymously, even with a real id kept from an older app version.
+      const hidden = !allowed
+        || (targetUserId !== userId
+          && await conversationRepository.isAnonymousCorrespondentOf(userId, targetUserId));
 
       socket.emit('presence_result', {
         userId: targetUserId,
         conversationId: conversationId || null,
-        online: onlineUsers.has(targetUserId),
+        online: hidden ? false : onlineUsers.has(targetUserId),
       });
     });
 

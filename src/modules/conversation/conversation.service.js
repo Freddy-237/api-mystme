@@ -4,6 +4,7 @@ const linkRepository = require('../link/link.repository');
 const identityRepository = require('../identity/identity.repository');
 const trustService = require('../trust/trust.service');
 const AppError = require('../../utils/AppError');
+const { conversationForViewer } = require('../../utils/participantMask');
 
 /**
  * Start a conversation via an invite code.
@@ -49,7 +50,7 @@ const resolveLink = async (inviteCode, anonymousUserId) => {
     conversationId: conversation.id,
     ownerId: conversation.owner_id,
     targetPseudo: conversation.owner_pseudo || 'Anonyme',
-    anonymousPseudo: conversation.anonymous_pseudo || 'Ghost_92',
+    anonymousPseudo: conversation.anonymous_pseudo || 'Anonyme',
   };
 };
 
@@ -63,19 +64,27 @@ const assertParticipant = async (conversationId, userId) => {
   return conv;
 };
 
+// Everything returned to a client goes through conversationForViewer: the
+// link owner must never receive the anonymous participant's real id.
 const getConversation = async (conversationId, userId) => {
-  return assertParticipant(conversationId, userId);
+  const conv = await assertParticipant(conversationId, userId);
+  return conversationForViewer(conv, userId);
 };
 
 const getMyConversations = async (userId, options = {}) => {
   const limit = Number.isInteger(options.limit) ? options.limit : 50;
   const offset = Number.isInteger(options.offset) ? options.offset : 0;
-  return conversationRepository.findByParticipantWithUnread(userId, { limit, offset });
+  const page = await conversationRepository.findByParticipantWithUnread(userId, { limit, offset });
+  return {
+    ...page,
+    items: page.items.map((conv) => conversationForViewer(conv, userId)),
+  };
 };
 
 const blockConversation = async (conversationId, userId) => {
   await assertParticipant(conversationId, userId);
-  return conversationRepository.blockConversation(conversationId);
+  const blocked = await conversationRepository.blockConversation(conversationId);
+  return conversationForViewer(blocked, userId);
 };
 
 const archiveConversation = async (conversationId, userId) => {
