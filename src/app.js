@@ -15,6 +15,7 @@ const messageRoutes = require('./modules/message/message.routes');
 const trustRoutes = require('./modules/trust/trust.routes');
 const moderationRoutes = require('./modules/moderation/moderation.routes');
 const subscriptionRoutes = require('./modules/subscription/subscription.routes');
+const adminRoutes = require('./modules/admin/admin.routes');
 
 // Import middlewares
 const errorMiddleware = require('./middlewares/error.middleware');
@@ -60,7 +61,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Request-Id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Request-Id', 'X-Admin-Request'],
     exposedHeaders: ['X-Request-Id'],
     maxAge: 86400,
   })
@@ -118,6 +119,7 @@ app.use('/message', messageRoutes);
 app.use('/trust', trustRoutes);
 app.use('/moderation', moderationRoutes);
 app.use('/subscription', subscriptionRoutes);
+app.use('/admin', adminRoutes);
 
 // --- 404 ---
 app.use((_req, res) => {

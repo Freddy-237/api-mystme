@@ -12,6 +12,10 @@ const csrfMiddleware = (req, res, next) => {
   // Skip CSRF for endpoints that create or destroy sessions
   if (CSRF_EXEMPT_PATHS.has(req.path)) return next();
 
+  // The back-office has its own protection (SameSite=Strict cookie + a
+  // mandatory X-Admin-Request header), see modules/admin/admin.auth.js.
+  if (req.path === '/admin' || req.path.startsWith('/admin/')) return next();
+
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return next();
