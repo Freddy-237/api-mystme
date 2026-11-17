@@ -49,7 +49,6 @@ test('production env validation rejects missing Cloudinary credentials', () => {
     CLOUDINARY_CLOUD_NAME: '',
     CLOUDINARY_API_KEY: '',
     CLOUDINARY_API_SECRET: '',
-    MODERATION_API_KEY: 'mod-key',
   });
 
   assert.notEqual(result.status, 0);
@@ -64,7 +63,6 @@ test('production env validation rejects missing DB_PASSWORD when DATABASE_URL is
     CLOUDINARY_CLOUD_NAME: 'demo',
     CLOUDINARY_API_KEY: 'key',
     CLOUDINARY_API_SECRET: 'secret',
-    MODERATION_API_KEY: 'mod-key',
     DB_HOST: 'localhost',
     DB_USER: 'postgres',
     DB_NAME: 'mystme',
@@ -77,7 +75,7 @@ test('production env validation rejects missing DB_PASSWORD when DATABASE_URL is
   assert.match(result.stderr + result.stdout, /DB_PASSWORD is required in production/);
 });
 
-test('production env validation rejects missing MODERATION_API_KEY', () => {
+test('production no longer requires a moderation key (moderation moved to the back-office)', () => {
   const result = runEnvLoader({
     NODE_ENV: 'production',
     JWT_SECRET: 'supersecret',
@@ -85,13 +83,9 @@ test('production env validation rejects missing MODERATION_API_KEY', () => {
     CLOUDINARY_CLOUD_NAME: 'demo',
     CLOUDINARY_API_KEY: 'key',
     CLOUDINARY_API_SECRET: 'secret',
-    DB_HOST: 'localhost',
-    DB_USER: 'postgres',
-    DB_NAME: 'mystme',
-    DB_PASSWORD: 'password',
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
     MODERATION_API_KEY: '',
   });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr + result.stdout, /MODERATION_API_KEY is required in production/);
+  assert.equal(result.status, 0, result.stderr);
 });

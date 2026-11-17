@@ -78,12 +78,8 @@ if (!env.hasEmailConfig()) {
   console.log('  ⚠ No email provider configured - OTP will fail in production');
 }
 
-// Moderation
-logSection('Moderation');
-const modStatus = env.moderationApiKey && env.moderationApiKey !== 'dev-moderation-key'
-  ? '✓ configured'
-  : '⚠ dev mode';
-logItem('Moderation API Key', modStatus);
+// Moderation: handled in the back-office (admin.myst-me.com). First owner:
+//   npm run admin:create -- --email <email> --name "<nom>"
 
 // Firebase
 logSection('Firebase (Push Notifications)');
@@ -103,7 +99,6 @@ const checks = [
   { label: 'Database', pass: !!env.databaseUrl || (env.db.host && env.db.user) },
   { label: 'Cloudinary', pass: env.cloudinaryConfigured },
   { label: 'Email (OTP)', pass: env.hasEmailConfig() },
-  { label: 'Moderation API', pass: env.moderationApiKey && env.moderationApiKey !== 'dev-moderation-key' },
 ];
 
 checks.forEach(check => {
@@ -134,8 +129,6 @@ if (readinessPercent < 100) {
         console.log('  • Get Cloudinary API keys from https://cloudinary.com');
       } else if (check.label === 'Email (OTP)') {
         console.log('  • Set BREVO_API_KEY or SMTP_* variables for email delivery');
-      } else if (check.label === 'Moderation API') {
-        console.log('  • Set MODERATION_API_KEY to your moderation provider key');
       }
     }
   });
