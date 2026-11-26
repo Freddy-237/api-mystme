@@ -7,6 +7,7 @@ const logger = require('./utils/logger');
 const env = require('./config/env');
 const runMigration = require('./database/runMigration');
 const webPurgeJob = require('./jobs/webPurge.job');
+const maintenanceJob = require('./jobs/maintenance.job');
 
 const server = http.createServer(app);
 
@@ -31,6 +32,7 @@ runMigration({ closePool: false })
     server.listen(env.port, () => {
       logger.info(`Server running on port ${env.port}`);
       webPurgeJob.start();
+      maintenanceJob.start();
     });
   })
   .catch((err) => {
@@ -41,6 +43,7 @@ runMigration({ closePool: false })
 const shutdown = async (signal) => {
   logger.info({ signal }, 'Received shutdown signal');
   webPurgeJob.stop();
+  maintenanceJob.stop();
   server.close(async () => {
     try {
       await pool.end();

@@ -161,12 +161,14 @@ test('Google rejects an HTTP error response even when its body is JSON', async (
   assert.equal(receipt.valid, false);
 });
 
-test('Google accepts an active subscription with a future expiry', async (t) => {
+test('Google accepts an active subscription with a future expiry and acknowledges it', async (t) => {
   setEnv(t, 'GOOGLE_SERVICE_ACCOUNT', googleCredentials());
-  mockHttpsResponses(t, [
+  const responses = [
     { body: { access_token: 'test-access-token' } },
-    { body: { paymentState: 1, expiryTimeMillis: String(Date.now() + 60_000) } },
-  ]);
+    { body: { paymentState: 1, acknowledgementState: 0, expiryTimeMillis: String(Date.now() + 60_000) } },
+    { body: {} }, // :acknowledge
+  ];
+  mockHttpsResponses(t, responses);
 
   const receipt = await receiptService.verifyGoogleReceipt(
     'purchase-token',
@@ -175,6 +177,20 @@ test('Google accepts an active subscription with a future expiry', async (t) => 
   );
   assert.equal(receipt.valid, true);
   assert.equal(receipt.productId, 'mystme_premium_monthly');
+  assert.equal(responses.length, 0, 'the purchase must be acknowledged');
+  const ackCall = https.request.mock.calls[2].arguments[0];
+  assert.equal(ackCall.method, 'POST');
+  assert.match(ackCall.path, /purchase-token:acknowledge$/);
+});
+
+test('Google does not acknowledge a purchase twice', async (t) => {
+  setEnv(t, 'GOOGLE_SERVICE_ACCOUNT', googleCredentials());
+  mockHttpsResponses(t, [
+    { body: { access_token: 'test-access-token' } },
+    { body: { paymentState: 1, acknowledgementState: 1, expiryTimeMillis: String(Date.now() + 60_000) } },
+  ]);
+  const receipt = await receiptService.verifyGoogleReceipt('purchase-token', 'mystme_premium_monthly', true);
+  assert.equal(receipt.valid, true);
 });
 
 test('Google rejects missing and expired subscription expirations', async (t) => {

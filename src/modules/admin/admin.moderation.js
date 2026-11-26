@@ -31,17 +31,24 @@ const loadExtras = async (reportIds) => {
   if (!reportIds.length) return new Map();
   const r = await pool.query(
     `SELECT r.id AS report_id,
-            c.anonymous_alias, c.status AS conversation_status,
-            m.media_type, m.media_url, m.is_deleted AS message_deleted,
+            COALESCE(c.anonymous_alias, r.anonymous_alias) AS anonymous_alias,
+            CASE WHEN r.conversation_id IS NULL THEN 'deleted' ELSE c.status END AS conversation_status,
+            COALESCE(m.media_type, ev.media_type) AS media_type,
+            COALESCE(m.media_url, ev.media_url) AS media_url,
+            (m.id IS NULL OR m.is_deleted) AS message_deleted,
             u.is_banned AS target_banned,
+            (u.id IS NULL) AS target_deleted,
             a.display_name AS reviewer_name
        FROM reports r
-       JOIN conversations c ON c.id = r.conversation_id
+       LEFT JOIN conversations c ON c.id = r.conversation_id
        LEFT JOIN messages m ON m.id = r.message_id
-       LEFT JOIN users u ON u.id = COALESCE(
-              m.sender_id,
-              CASE WHEN c.owner_id = r.reported_by THEN c.anonymous_id
-                   WHEN c.anonymous_id = r.reported_by THEN c.owner_id END)
+       LEFT JOIN LATERAL (
+         SELECT e->>'mediaType' AS media_type, e->>'mediaUrl' AS media_url
+           FROM jsonb_array_elements(COALESCE(r.evidence, '[]'::jsonb)) e
+          WHERE (e->>'isReported')::boolean
+          LIMIT 1
+       ) ev ON TRUE
+       LEFT JOIN users u ON u.id = r.reported_user_id
        LEFT JOIN admin_users a
               ON r.reviewed_by LIKE 'admin:%'
              AND a.id::text = SUBSTRING(r.reviewed_by FROM 7)
@@ -70,9 +77,9 @@ const sanitize = (report, extra = {}) => {
       alias: extra.anonymous_alias || 'Anonyme',
       status: extra.conversation_status || null,
     },
-    message: report.message_id
+    message: report.kind === 'message'
       ? {
-          id: report.message_id,
+          id: report.message_id || null,
           content: report.reported_message_content ?? null,
           mediaType: extra.media_type || null,
           mediaUrl: extra.media_url || null,
@@ -83,6 +90,8 @@ const sanitize = (report, extra = {}) => {
     target: {
       ref: userRef(report.reported_user_id),
       isBanned: !!extra.target_banned,
+      // The reported account deleted itself: it can no longer be banned.
+      isDeleted: !!extra.target_deleted,
       reportCount: report.total_report_count,
       uniqueReporters: report.unique_reporter_count,
       autoFlagged: !!report.auto_flagged,
@@ -106,6 +115,21 @@ const listReports = async ({ status = 'pending', limit = 50 } = {}) => {
 };
 
 const loadContext = async (report) => {
+  // What the moderator judges is what was reported: the snapshot taken when
+  // the report was filed, which survives later deletions.
+  if (Array.isArray(report.evidence)) {
+    return report.evidence.map((m) => ({
+      id: m.id,
+      role: m.role || null,
+      content: m.content,
+      mediaType: m.mediaType || null,
+      mediaUrl: m.mediaUrl || null,
+      isDeleted: !!m.isDeleted,
+      isReported: !!m.isReported,
+      createdAt: m.createdAt,
+    }));
+  }
+  if (!report.conversation_id) return [];
   const params = [report.conversation_id, CONTEXT_SIZE];
   let rows;
   if (report.message_id) {

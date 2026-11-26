@@ -10,6 +10,7 @@ const {
 const AppError = require('../../utils/AppError');
 const logger = require('../../utils/logger');
 const { messageForViewer } = require('../../utils/participantMask');
+const { deleteMedia } = require('../../services/upload.service');
 
 const persistMessageWithConversationState = async ({
   conversationId,
@@ -212,6 +213,18 @@ const deleteMessage = async (messageId, userId) => {
     throw new AppError('Non autorisé — seul l\'auteur peut supprimer', 403);
   }
   const deleted = await messageRepository.softDelete(messageId);
+
+  // The file goes too — unless the message is under a pending report: then
+  // it is kept as evidence until a moderator has looked at it.
+  if (msg.media_url) {
+    const underReview = await messageRepository.hasPendingReport(messageId);
+    if (!underReview) {
+      await messageRepository.clearMedia(messageId);
+      deleteMedia([{ media_url: msg.media_url, media_type: msg.media_type }])
+        .catch((error) => logger.warn({ err: error, messageId }, 'deleted message media cleanup failed'));
+    }
+  }
+
   const conv = await conversationRepository.findById(deleted.conversation_id);
   return messageForViewer(deleted, conv, userId);
 };

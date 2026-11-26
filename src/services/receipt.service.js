@@ -158,11 +158,14 @@ const verifyGoogleReceipt = async (purchaseToken, productId, isSubscription = tr
     const pendingPayment = result.paymentState != null &&
       ![1, 2].includes(Number(result.paymentState));
     const valid = !pendingPayment && expiresAt && expiresAt.getTime() > Date.now();
+    if (valid) await _acknowledgeGoogle(url, result, accessToken);
     return { valid: !!valid, expiresAt: valid ? expiresAt : null, productId };
   }
 
   // Consumable: purchaseState 0 = purchased.
-  return { valid: result.purchaseState === 0, expiresAt: null, productId };
+  const valid = result.purchaseState === 0;
+  if (valid) await _acknowledgeGoogle(url, result, accessToken);
+  return { valid, expiresAt: null, productId };
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +204,45 @@ function _postJson(url, body) {
     req.on('error', reject);
     req.write(body);
     req.end();
+  });
+}
+
+/**
+ * Google refunds any purchase that is not acknowledged within 3 days.
+ * Acknowledging server-side (once the purchase is verified) makes that
+ * independent of the app. Best effort: a failure is logged, never thrown.
+ */
+async function _acknowledgeGoogle(purchaseUrl, purchase, accessToken) {
+  if (Number(purchase.acknowledgementState) === 1) return true;
+  const ok = await _request(`${purchaseUrl}:acknowledge`, accessToken, 'POST', '{}');
+  if (!ok) logger.error('[receipt] Google purchase acknowledgement FAILED — it will be refunded in 3 days');
+  return ok;
+}
+
+function _request(url, bearerToken, method, body) {
+  return new Promise((resolve) => {
+    const parsed = new URL(url);
+    const req = https.request(
+      {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        method,
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve(res.statusCode >= 200 && res.statusCode < 300));
+      },
+    );
+    req.on('error', (err) => {
+      logger.error({ err }, '[receipt] Google API request failed');
+      resolve(false);
+    });
+    req.end(body);
   });
 }
 
