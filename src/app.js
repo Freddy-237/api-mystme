@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
+const parseCookies = require('./utils/parseCookies');
+const { extractBearerToken } = require('./utils/authToken');
 const Sentry = require('./config/sentry');
 const AppError = require('./utils/AppError');
 const env = require('./config/env');
@@ -21,6 +23,7 @@ const adminRoutes = require('./modules/admin/admin.routes');
 const errorMiddleware = require('./middlewares/error.middleware');
 const csrfMiddleware = require('./middlewares/csrf.middleware');
 const createRateLimit = require('./middlewares/rateLimit.middleware');
+const { getDefaultKey } = createRateLimit;
 
 const app = express();
 
@@ -71,6 +74,17 @@ app.use(csrfMiddleware);
 
 // --- Rate limiting (express-rate-limit) ---
 if (process.env.NODE_ENV !== 'test') {
+  // Safety net for every route without a tighter limit of its own. Keyed by
+  // session when there is one: mobile carriers put many users behind one IP
+  // (CGNAT), so an IP-only cap would throttle innocent users together.
+  const sessionOrIpKey = (req) => {
+    const token = extractBearerToken(req.headers.authorization)
+      || parseCookies(req.headers.cookie)[env.authCookieName];
+    return token
+      ? `s:${createHash('sha256').update(token).digest('hex').slice(0, 32)}`
+      : `ip:${getDefaultKey(req)}`;
+  };
+  app.use(createRateLimit('http:global', { windowMs: 60_000, maxRequests: 300, keyGenerator: sessionOrIpKey }));
   app.use('/identity/init', createRateLimit('http:identity:init', { windowMs: 60_000, maxRequests: 10 }));
   app.use('/message', createRateLimit('http:message', { windowMs: 60_000, maxRequests: 30 }));
   app.use('/conversation', createRateLimit('http:conversation', { windowMs: 60_000, maxRequests: 40 }));
