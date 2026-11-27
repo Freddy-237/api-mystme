@@ -126,13 +126,20 @@ const listBackups = async () => {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 };
 
+/** Stored files are base64 text; raw encrypted bytes are accepted too. */
+const fromStored = (buffer) => (
+  buffer.subarray(0, MAGIC.length).equals(MAGIC)
+    ? buffer
+    : Buffer.from(buffer.toString('utf8').trim(), 'base64')
+);
+
 const downloadBackup = async (publicId) => {
   const url = cloudinary().utils.private_download_url(publicId, '', {
     resource_type: 'raw', type: 'authenticated', expires_at: Math.floor(Date.now() / 1000) + 300,
   });
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Téléchargement impossible (HTTP ${res.status})`);
-  return Buffer.from(await res.arrayBuffer());
+  return fromStored(Buffer.from(await res.arrayBuffer()));
 };
 
 const pruneOldBackups = async () => {
@@ -148,7 +155,9 @@ const runBackup = async () => {
   const payload = await exportDatabase();
   const file = await encrypt(payload);
   const stamp = payload.createdAt.replace(/[-:]/g, '').replace('T', '_').slice(0, 15);
-  const result = await upload(file, `db_${stamp}.bin`);
+  // Cloudinary refuses raw uploads with "binary" extensions (.bin…): the
+  // encrypted file is stored as base64 text in a .txt resource.
+  const result = await upload(Buffer.from(file.toString('base64')), `db_${stamp}.txt`);
   const pruned = await pruneOldBackups();
   const summary = { publicId: result.public_id, bytes: file.length, rows: payload.counts, pruned };
   logger.info({ publicId: summary.publicId, bytes: summary.bytes, pruned }, 'database backup stored');
@@ -162,6 +171,7 @@ module.exports = {
   exportDatabase,
   encrypt,
   decrypt,
+  fromStored,
   restoreDatabase,
   listBackups,
   downloadBackup,
