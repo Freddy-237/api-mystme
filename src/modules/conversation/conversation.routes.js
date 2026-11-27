@@ -23,6 +23,15 @@ router.post(
   conversationController.resolveLink,
 );
 
+// GET /conversation/by-invite/:code — my existing conversation via this link (never creates one)
+router.get(
+  '/by-invite/:code',
+  authMiddleware,
+  param('code').isString().trim().isLength({ min: 1, max: 64 }).withMessage('code invalide'),
+  validate,
+  conversationController.findByInvite,
+);
+
 // GET /conversation/mine — get my conversations
 router.get(
   '/mine',

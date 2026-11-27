@@ -67,9 +67,16 @@ const deactivateLink = async (id) => {
   return result.rows[0];
 };
 
+/** Any link with this code, active or not (to find past conversations). */
+const findAnyByCode = async (code) => {
+  const result = await pool.query('SELECT id, owner_id, is_active FROM links WHERE code = $1', [code]);
+  return result.rows[0];
+};
+
 module.exports = {
   createLink,
   findByCode,
+  findAnyByCode,
   findActiveByOwner,
   findPublicByCode,
   findById,

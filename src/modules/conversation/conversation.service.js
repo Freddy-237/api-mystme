@@ -54,6 +54,28 @@ const resolveLink = async (inviteCode, anonymousUserId) => {
   };
 };
 
+/**
+ * The conversation this user ALREADY has through an invite code, without
+ * creating anything. Lets a returning web visitor get back to their thread
+ * instead of the "send your first message" screen. Works even if the link was
+ * deactivated since: the conversation itself still exists.
+ */
+const findExistingByInvite = async (inviteCode, userId) => {
+  const notFound = () => new AppError('Aucune conversation pour ce lien', 404, 'CONVERSATION_NOT_FOUND');
+  const link = await linkRepository.findAnyByCode(inviteCode);
+  if (!link) throw notFound();
+  const existing = await conversationRepository.findByLinkAndAnonymous(link.id, userId);
+  if (!existing || !existing.started_at) throw notFound();
+  const conversation = await conversationRepository.findById(existing.id);
+  return {
+    conversation,
+    conversationId: conversation.id,
+    ownerId: conversation.owner_id,
+    targetPseudo: conversation.owner_pseudo || 'Anonyme',
+    anonymousPseudo: conversation.anonymous_pseudo || 'Anonyme',
+  };
+};
+
 /** Assert user is a participant of the conversation, return the conversation. */
 const assertParticipant = async (conversationId, userId) => {
   const conv = await conversationRepository.findById(conversationId);
@@ -106,6 +128,7 @@ const markAsRead = async (conversationId, userId) => {
 module.exports = {
   startConversation,
   resolveLink,
+  findExistingByInvite,
   getConversation,
   getMyConversations,
   blockConversation,
