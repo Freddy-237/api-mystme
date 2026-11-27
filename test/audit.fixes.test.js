@@ -164,7 +164,9 @@ test('backups: encrypted round trip restores every row exactly', async () => {
   const file = await backup.encrypt(payload, key);
   assert.ok(!file.toString('latin1').includes('schema_migrations'), 'backup must not be readable');
   await assert.rejects(backup.decrypt(file, require('crypto').randomBytes(32)));
-  const back = await backup.decrypt(file, key);
+  // Stored on Cloudinary as base64 text (.txt): must read back identically.
+  const stored = Buffer.from(file.toString('base64'));
+  const back = await backup.decrypt(backup.fromStored(stored), key);
   assert.deepEqual(back.counts, payload.counts);
 
   // Restore into a throwaway database (migrated from scratch), so the
