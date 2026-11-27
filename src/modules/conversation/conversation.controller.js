@@ -47,6 +47,14 @@ const resolveLink = async (req, res, next) => {
   }
 };
 
+const findByInvite = async (req, res, next) => {
+  try {
+    res.json(await conversationService.findExistingByInvite(req.params.code, req.user.id));
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getConversation = async (req, res, next) => {
   try {
     const conv = await conversationService.getConversation(req.params.id, req.user.id);
@@ -109,6 +117,7 @@ const markAsRead = async (req, res, next) => {
 module.exports = {
   startConversation,
   resolveLink,
+  findByInvite,
   getConversation,
   getMyConversations,
   blockConversation,
