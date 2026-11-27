@@ -16,7 +16,12 @@ const createLink = async (link) => {
 
 const findByCode = async (code) => {
   logger.info('[link.repo] findByCode');
-  const result = await pool.query('SELECT * FROM links WHERE code = $1 AND is_active = TRUE', [code]);
+  const result = await pool.query(
+    `SELECT l.* FROM links l
+       JOIN users u ON u.id = l.owner_id
+      WHERE l.code = $1 AND l.is_active = TRUE AND NOT COALESCE(u.is_banned, FALSE)`,
+    [code],
+  );
   logger.info({ found: !!result.rows[0] }, '[link.repo] findByCode result');
   return result.rows[0];
 };
@@ -35,7 +40,7 @@ const findPublicByCode = async (code) => {
     `SELECT l.code, l.is_active, u.pseudo AS owner_pseudo
        FROM links l
        JOIN users u ON u.id = l.owner_id
-      WHERE l.code = $1 AND l.is_active = TRUE`,
+      WHERE l.code = $1 AND l.is_active = TRUE AND NOT COALESCE(u.is_banned, FALSE)`,
     [code],
   );
   return result.rows[0];

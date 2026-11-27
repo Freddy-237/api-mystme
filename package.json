@@ -10,7 +10,8 @@
     "verify-config": "node verify-config.js",
     "check-config": "node verify-config.js",
     "setup": "node setup-guide.js",
-    "admin:create": "node src/scripts/createAdmin.js"
+    "admin:create": "node src/scripts/createAdmin.js",
+    "backup": "node src/scripts/backup.js"
   },
   "description": "MystMe backend API",
   "dependencies": {

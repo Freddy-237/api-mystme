@@ -146,7 +146,10 @@ const findOrCreateByLinkAndAnonymous = async ({ id, link_id, owner_id, anonymous
 
     const existing = await findByLinkAndAnonymous(link_id, anonymous_id, client);
     if (existing) {
-      await reactivateForUsers(existing.id, [owner_id, anonymous_id], client);
+      // Re-opening the link only brings the conversation back for the visitor.
+      // If the owner deleted or archived it, it stays that way for them until
+      // a new message actually arrives.
+      await reactivateForUsers(existing.id, [anonymous_id], client);
       await client.query('COMMIT');
       return {
         conversation: await findById(existing.id),

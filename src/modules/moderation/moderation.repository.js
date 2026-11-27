@@ -5,60 +5,42 @@ const execute = (queryable, query, values) => queryable.query(query, values);
 
 const autoFlagThreshold = env.moderationAutoFlagThreshold;
 
-const resolveReportedUserSql = ({ reportAlias, conversationAlias, messageAlias }) => `
-  COALESCE(
-    ${messageAlias}.sender_id,
-    CASE
-      WHEN ${conversationAlias}.owner_id = ${reportAlias}.reported_by THEN ${conversationAlias}.anonymous_id
-      WHEN ${conversationAlias}.anonymous_id = ${reportAlias}.reported_by THEN ${conversationAlias}.owner_id
-      ELSE NULL
-    END
-  )
+// The reported account and the participants are stored on the report itself
+// (migration 025), so a report stays readable after the conversation, the
+// message or the accounts involved have been deleted.
+const signalSummarySql = (targetSql) => `
+  SELECT COUNT(*)::int AS total_report_count,
+         COUNT(DISTINCT rr.reported_by)::int AS unique_reporter_count
+    FROM reports rr
+   WHERE rr.status <> 'dismissed'
+     AND rr.reported_user_id = ${targetSql}
 `;
 
-const buildReportSelect = ({ reportAlias = 'r', conversationAlias = 'c', messageAlias = 'm', reporterAlias = 'reporter', ownerAlias = 'owner_user', anonymousAlias = 'anonymous_user' } = {}) => {
-  const reportedUserSql = resolveReportedUserSql({
-    reportAlias,
-    conversationAlias,
-    messageAlias,
-  });
-
-  return `
-    SELECT ${reportAlias}.*,
-           ${reporterAlias}.pseudo AS reporter_pseudo,
-           ${messageAlias}.sender_id AS reported_message_sender_id,
-           ${messageAlias}.content AS reported_message_content,
-           ${messageAlias}.created_at AS reported_message_created_at,
-           ${conversationAlias}.owner_id,
-           ${conversationAlias}.anonymous_id,
-           ${ownerAlias}.pseudo AS owner_pseudo,
-           ${anonymousAlias}.pseudo AS anonymous_pseudo,
-           ${reportedUserSql} AS reported_user_id,
+const buildReportSelect = () => `
+    SELECT r.*,
+           reporter.pseudo AS reporter_pseudo,
+           m.sender_id AS reported_message_sender_id,
+           COALESCE(m.content, ev.content) AS reported_message_content,
+           COALESCE(m.created_at, ev.created_at) AS reported_message_created_at,
+           owner_user.pseudo AS owner_pseudo,
+           anonymous_user.pseudo AS anonymous_pseudo,
            COALESCE(signal_summary.total_report_count, 0)::int AS total_report_count,
            COALESCE(signal_summary.unique_reporter_count, 0)::int AS unique_reporter_count,
            ${autoFlagThreshold}::int AS auto_flag_threshold,
            (COALESCE(signal_summary.unique_reporter_count, 0) >= ${autoFlagThreshold}) AS auto_flagged
-      FROM reports ${reportAlias}
-      LEFT JOIN users ${reporterAlias} ON ${reporterAlias}.id = ${reportAlias}.reported_by
-      LEFT JOIN messages ${messageAlias} ON ${messageAlias}.id = ${reportAlias}.message_id
-      INNER JOIN conversations ${conversationAlias} ON ${conversationAlias}.id = ${reportAlias}.conversation_id
-      LEFT JOIN users ${ownerAlias} ON ${ownerAlias}.id = ${conversationAlias}.owner_id
-      LEFT JOIN users ${anonymousAlias} ON ${anonymousAlias}.id = ${conversationAlias}.anonymous_id
+      FROM reports r
+      LEFT JOIN users reporter ON reporter.id = r.reported_by
+      LEFT JOIN messages m ON m.id = r.message_id
+      LEFT JOIN users owner_user ON owner_user.id = r.owner_id
+      LEFT JOIN users anonymous_user ON anonymous_user.id = r.anonymous_id
       LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS total_report_count,
-               COUNT(DISTINCT rr.reported_by)::int AS unique_reporter_count
-          FROM reports rr
-          INNER JOIN conversations rc ON rc.id = rr.conversation_id
-          LEFT JOIN messages rm ON rm.id = rr.message_id
-         WHERE rr.status <> 'dismissed'
-           AND ${resolveReportedUserSql({
-             reportAlias: 'rr',
-             conversationAlias: 'rc',
-             messageAlias: 'rm',
-           })} = ${reportedUserSql}
-      ) signal_summary ON TRUE
+        SELECT e->>'content' AS content, (e->>'createdAt')::timestamp AS created_at
+          FROM jsonb_array_elements(COALESCE(r.evidence, '[]'::jsonb)) e
+         WHERE (e->>'isReported')::boolean
+         LIMIT 1
+      ) ev ON TRUE
+      LEFT JOIN LATERAL (${signalSummarySql('r.reported_user_id')}) signal_summary ON TRUE
   `;
-};
 
 const mapReportInsertValues = (report) => [
   report.id,
@@ -66,6 +48,12 @@ const mapReportInsertValues = (report) => [
   report.message_id,
   report.reported_by,
   report.reason,
+  report.message_id ? 'message' : 'conversation',
+  report.reported_user_id || null,
+  report.owner_id || null,
+  report.anonymous_id || null,
+  report.anonymous_alias || null,
+  report.evidence ? JSON.stringify(report.evidence) : null,
 ];
 
 const findExistingReport = async ({ conversationId, messageId, reportedBy }, queryable = pool) => {
@@ -77,7 +65,7 @@ const findExistingReport = async ({ conversationId, messageId, reportedBy }, que
       })()
     : (() => {
         params.push(conversationId);
-        return `r.conversation_id = $${params.length} AND r.message_id IS NULL`;
+        return `r.conversation_id = $${params.length} AND r.kind = 'conversation'`;
       })();
 
   const result = await execute(
@@ -92,8 +80,9 @@ const findExistingReport = async ({ conversationId, messageId, reportedBy }, que
 
 const createReport = async (report, queryable = pool) => {
   const query = `
-    INSERT INTO reports (id, conversation_id, message_id, reported_by, reason)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO reports (id, conversation_id, message_id, reported_by, reason,
+                         kind, reported_user_id, owner_id, anonymous_id, anonymous_alias, evidence)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
     RETURNING *;
   `;
   try {
@@ -181,19 +170,7 @@ module.exports = {
               ${autoFlagThreshold}::int AS auto_flag_threshold,
               (COALESCE(signal_summary.unique_reporter_count, 0) >= ${autoFlagThreshold}) AS auto_flagged
          FROM (SELECT $1::uuid AS user_id) target
-         LEFT JOIN LATERAL (
-           SELECT COUNT(*)::int AS total_report_count,
-                  COUNT(DISTINCT rr.reported_by)::int AS unique_reporter_count
-             FROM reports rr
-             INNER JOIN conversations rc ON rc.id = rr.conversation_id
-             LEFT JOIN messages rm ON rm.id = rr.message_id
-            WHERE rr.status <> 'dismissed'
-              AND ${resolveReportedUserSql({
-                reportAlias: 'rr',
-                conversationAlias: 'rc',
-                messageAlias: 'rm',
-              })} = target.user_id
-         ) signal_summary ON TRUE`,
+         LEFT JOIN LATERAL (${signalSummarySql('target.user_id')}) signal_summary ON TRUE`,
       [userId],
     );
 

@@ -65,6 +65,16 @@ const findById = async (messageId, queryable = pool) => {
 const createMessageWithConversationState = async (msg) => {
   return withTransaction(async (client) => {
     const message = await createMessage(msg, client);
+    // A conversation someone deleted on their side comes back when a new
+    // message arrives (archived ones stay archived). Blocking is the way to
+    // stop receiving messages for good.
+    await execute(
+      client,
+      `UPDATE conversation_user_status
+          SET status = 'active', updated_at = NOW()
+        WHERE conversation_id = $1 AND status = 'deleted'`,
+      [msg.conversation_id],
+    );
     const activatedConversation = await conversationRepository.setStartedAt(msg.conversation_id, client);
     return {
       message,
@@ -80,6 +90,19 @@ const softDelete = async (messageId, queryable = pool) => {
     [messageId]
   );
   return findById(messageId, queryable);
+};
+
+const hasPendingReport = async (messageId, queryable = pool) => {
+  const result = await execute(
+    queryable,
+    "SELECT 1 FROM reports WHERE message_id = $1 AND status = 'pending' LIMIT 1",
+    [messageId],
+  );
+  return result.rowCount > 0;
+};
+
+const clearMedia = async (messageId, queryable = pool) => {
+  await execute(queryable, 'UPDATE messages SET media_url = NULL WHERE id = $1', [messageId]);
 };
 
 /** Mark all messages in a conversation as read for a specific recipient. */
@@ -181,6 +204,8 @@ module.exports = {
   findByConversation,
   findById,
   softDelete,
+  hasPendingReport,
+  clearMedia,
   markRead,
   countBySenderInConversation,
   hideMessageForUser,

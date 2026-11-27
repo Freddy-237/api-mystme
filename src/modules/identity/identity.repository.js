@@ -87,6 +87,11 @@ const updateBanState = async (id, { isBanned, reason }, queryable = pool) => {
       RETURNING id, is_banned, ban_reason, banned_at`,
     [isBanned, reason || null, id],
   );
+  // A banned account's invite link goes dead: nobody can open a new
+  // conversation with it. After an unban the user simply creates a new link.
+  if (isBanned) {
+    await execute(queryable, 'UPDATE links SET is_active = FALSE WHERE owner_id = $1 AND is_active', [id]);
+  }
   return result.rows[0];
 };
 
